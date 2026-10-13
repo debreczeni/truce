@@ -1024,7 +1024,10 @@ where
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .params_arc();
     let transport_read = transport.clone();
-
+    let meter_store = plugin
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .meter_store();
     let params_read = Arc::clone(&params);
     let params_write = Arc::clone(&params);
     let params_plain = Arc::clone(&params);
@@ -1034,7 +1037,6 @@ where
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .task_spawner();
-    let plugin_meter = Arc::clone(plugin);
     let plugin_save = Arc::clone(plugin);
 
     PluginContext::from_closures(
@@ -1057,7 +1059,7 @@ where
                 let value = params_format.get_plain(id).unwrap_or(0.0);
                 params_format.format_value(id, value).unwrap_or_default()
             }),
-            get_meter: Box::new(move |id| plugin_meter.try_lock().map_or(0.0, |p| p.get_meter(id))),
+            get_meter: Box::new(move |id| meter_store.read(id)),
             get_state: Box::new(move || {
                 // Blocking is bounded by the audio callback's lock
                 // hold (a block's worth); a try_lock's empty fallback
