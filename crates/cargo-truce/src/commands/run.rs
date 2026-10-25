@@ -21,6 +21,7 @@ pub(crate) fn cmd_run(args: &[String]) -> Res {
     let mut target_cpu_arg: Option<String> = None;
     let mut extra_features: Vec<String> = Vec::new();
     let mut no_default_features = false;
+    let mut post_build_hook: Option<String> = None;
     let mut extra_args: Vec<String> = Vec::new();
     let mut past_separator = false;
     let mut i = 0;
@@ -34,6 +35,10 @@ pub(crate) fn cmd_run(args: &[String]) -> Res {
                 }
                 "--no-build" => no_build = true,
                 "--debug" => debug = true,
+                "--post-build-hook" => {
+                    post_build_hook =
+                        Some(crate::util::arg_value(args, &mut i, "--post-build-hook")?.to_string());
+                }
                 "--target-cpu" => {
                     target_cpu_arg =
                         Some(crate::util::arg_value(args, &mut i, "--target-cpu")?.to_string());
@@ -199,6 +204,7 @@ pub(crate) fn cmd_run(args: &[String]) -> Res {
     }
 
     let exec_path = exec_path_inside_stage(&staged, &bin_stem);
+    execute_post_build_hook(&root, plugin, &exec_path, post_build_hook.as_deref());
     eprintln!("Running {}...", exec_path.display());
     let status = Command::new(&exec_path).args(&extra_args).status()?;
 
@@ -206,6 +212,76 @@ pub(crate) fn cmd_run(args: &[String]) -> Res {
         return Err(format!("{} exited with {status}", exec_path.display()).into());
     }
     Ok(())
+}
+
+/// Runs a post-build pre-run hook before the standalone executable is launched.
+///
+/// Priority:
+/// 1. Path specified via `--post-build-hook <path>`
+/// 2. Sensible workspace convention: `<root>/.truce/hooks/post-run-build`
+fn execute_post_build_hook(
+    root: &std::path::Path,
+    plugin: &crate::config::PluginDef,
+    exec_path: &std::path::Path,
+    cli_hook: Option<&str>,
+) {
+    let hook_path = if let Some(custom) = cli_hook {
+        let p = std::path::PathBuf::from(custom);
+        if p.is_absolute() {
+            p
+        } else {
+            root.join(p)
+        }
+    } else {
+        root.join(".truce").join("hooks").join("post-run-build")
+    };
+
+    if !hook_path.is_file() {
+        if cli_hook.is_some() {
+            eprintln!(
+                "Warning: specified --post-build-hook '{}' not found or is not a file",
+                hook_path.display()
+            );
+        }
+        return;
+    }
+
+    let version = resolve_plugin_version(root, plugin);
+
+    eprintln!("Running post-build hook: {}...", hook_path.display());
+    let res = Command::new(&hook_path)
+        .arg(exec_path)
+        .arg(&plugin.name)
+        .arg(&plugin.crate_name)
+        .arg(&version)
+        .env("TRUCE_EXEC_PATH", exec_path)
+        .env("TRUCE_PLUGIN_NAME", &plugin.name)
+        .env("TRUCE_CRATE_NAME", &plugin.crate_name)
+        .env("TRUCE_PLUGIN_VERSION", &version)
+        .env("TRUCE_PROJECT_ROOT", root)
+        .status();
+
+    match res {
+        Ok(status) if !status.success() => {
+            eprintln!("Warning: post-build hook exited with status {status}");
+        }
+        Err(err) => {
+            eprintln!("Warning: failed to execute post-build hook: {err}");
+        }
+        _ => {}
+    }
+}
+
+/// Resolves the plugin version from its manifest or workspace root Cargo.toml.
+fn resolve_plugin_version(root: &std::path::Path, plugin: &crate::config::PluginDef) -> String {
+    if let Some(manifest) = crate::util::locate_plugin_manifest(root, &plugin.crate_name) {
+        if let Some(parent) = manifest.parent() {
+            if let Ok(ver) = crate::util::read_workspace_version(parent) {
+                return ver;
+            }
+        }
+    }
+    crate::util::read_workspace_version(root).unwrap_or_else(|_| "0.1.0".to_string())
 }
 
 /// Build a `.app` bundle layout around the standalone binary.
@@ -349,6 +425,9 @@ Options:
   --target-cpu <value>
                    Override the x86_64 default. baseline|v2|v3|v4|native
                    or any literal rustc target-cpu name.
+  --post-build-hook <path>
+                   Execute a script or binary after build & staging finishes,
+                   prior to launching. Defaults to `.truce/hooks/post-run-build` if present.
   -h, --help       Show this message."
     );
 }
