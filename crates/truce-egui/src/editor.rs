@@ -736,6 +736,37 @@ impl<P: Params + ?Sized> EguiWindowHandler<P> {
             .get(&egui::ViewportId::ROOT)
             .map(|v| v.repaint_delay);
 
+        for command in &output.platform_output.commands {
+            if let egui::OutputCommand::OpenUrl(open_url) = command {
+                let clean = open_url.url.trim();
+                if clean.starts_with("http://") || clean.starts_with("https://") {
+                    let to_open = clean.to_string();
+                    std::thread::spawn(move || {
+                        #[cfg(target_os = "macos")]
+                        {
+                            let _ = std::process::Command::new("/usr/bin/open")
+                                .arg(&to_open)
+                                .status();
+                        }
+
+                        #[cfg(target_os = "windows")]
+                        {
+                            let _ = std::process::Command::new("cmd")
+                                .args(["/C", "start", "", &to_open])
+                                .status();
+                        }
+
+                        #[cfg(all(unix, not(target_os = "macos")))]
+                        {
+                            let _ = std::process::Command::new("xdg-open")
+                                .arg(&to_open)
+                                .status();
+                        }
+                    });
+                }
+            }
+        }
+
         let clipped_primitives = self
             .egui_ctx
             .tessellate(output.shapes, output.pixels_per_point);
