@@ -512,9 +512,14 @@ pub(crate) fn stage_vst2(
 /// Stage an AU v2 bundle (`.component` directory) into the staging
 /// directory. Audio Unit is macOS-only.
 #[cfg(target_os = "macos")]
-pub(crate) fn stage_au2(root: &Path, p: &PluginDef, config: &Config, staging: &Path) -> Res {
-    let dylib =
-        truce_build::target_dir(root).join(format!("release/lib{}_au.dylib", p.dylib_stem()));
+pub(crate) fn stage_au2(
+    root: &Path,
+    p: &PluginDef,
+    config: &Config,
+    staging: &Path,
+    target: Option<&str>,
+) -> Res {
+    let dylib = crate::release_lib_for_target(root, &format!("{}_au", p.dylib_stem()), target);
     if !dylib.exists() {
         return Err(format!("Missing: {}", dylib.display()).into());
     }
