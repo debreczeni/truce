@@ -1276,6 +1276,23 @@ fn reopen_output_or_default<P: PluginExport>(
     )
 }
 
+fn report_stream_error(prefix: &str, err: cpal::StreamError) {
+    use std::sync::atomic::AtomicU64;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    static LAST_ERR_TS: AtomicU64 = AtomicU64::new(0);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let prev = LAST_ERR_TS.swap(now, Ordering::Relaxed);
+    if now != prev {
+        eprintln!("{prefix}: {err}");
+    }
+    // Prevent tight 100% CPU busy-spin and terminal flooding if ALSA keeps returning POLLERR
+    std::thread::sleep(Duration::from_millis(50));
+}
+
 #[allow(clippy::too_many_arguments)]
 fn open_output_stream<P: PluginExport>(
     name: Option<&str>,
@@ -1438,7 +1455,7 @@ fn open_output_stream<P: PluginExport>(
                         capture_a.as_ref(),
                     );
                 },
-                |err| eprintln!("Audio error: {err}"),
+                move |err| report_stream_error("Audio error", err),
                 None,
             )
             .map_err(|e| format!("could not build output stream: {e}"))?,
@@ -1672,7 +1689,7 @@ fn build_and_play_input_stream(
                     ring.force_push(normalize_input_frame(frame, width));
                 }
             },
-            |err| eprintln!("Input error: {err}"),
+            move |err| report_stream_error("Input error", err),
             None,
         )
         .map_err(|e| -> BoxErr { format!("could not build input stream: {e}").into() })?;
