@@ -469,6 +469,8 @@ struct EguiWindowHandler<P: Params + ?Sized> {
     /// thread in the swapchain acquire - see
     /// [`truce_gui::PaintPacer`].
     pacer: truce_gui::PaintPacer,
+    /// Whether the editor window currently has focus.
+    focused: bool,
     /// The window's *actual* physical size from the last host-driven
     /// `Resized` (`(0,0)` = none). The wgpu surface is configured to cover
     /// this exact extent - which may exceed `to_physical_px(fitted)` when a
@@ -709,7 +711,7 @@ impl<P: Params + ?Sized> EguiWindowHandler<P> {
             time: Some(self.start_time.elapsed().as_secs_f64()),
             modifiers: self.modifiers,
             events: std::mem::take(&mut self.pending_events),
-            focused: true,
+            focused: self.focused,
             ..Default::default()
         };
         raw_input
@@ -970,7 +972,11 @@ impl<P: Params + ?Sized + 'static> WindowHandler for EguiWindowHandler<P> {
             // frames the compositor can't take, so pacing there only
             // adds latency (a resize-time acquire stall inflates the
             // pace estimate for seconds).
-            if GUI_THREAD_BLOCKS_ON_GPU && self.pacer.should_hold() {
+            // When focused on macOS / Linux, CAMetalLayer / display vsync
+            // paces presentation directly; bypassing the veto avoids
+            // artificial frame drops. Pacing applies when unfocused to
+            // match the throttled background compositor without thrashing.
+            if GUI_THREAD_BLOCKS_ON_GPU && !self.focused && self.pacer.should_hold() {
                 return;
             }
             // Idle gate: skip the whole frame (no egui run, no present)
@@ -1048,6 +1054,12 @@ impl<P: Params + ?Sized + 'static> WindowHandler for EguiWindowHandler<P> {
                             EventStatus::Captured
                         }
                         ButtonPressed { button, modifiers } => {
+                            // Interactive click marks window focused and resets
+                            // any background pacing delay immediately.
+                            self.focused = true;
+                            self.pacer.reset();
+                            self.force_paint = true;
+
                             // On Windows, a WS_CHILD plugin window doesn't receive
                             // WM_KEYDOWN/WM_CHAR until it has HWND focus. baseview
                             // doesn't SetFocus on mouse-down, so we do it here -
@@ -1140,7 +1152,18 @@ impl<P: Params + ?Sized + 'static> WindowHandler for EguiWindowHandler<P> {
                     EventStatus::Captured
                 }
                 Event::Window(win) => {
-                    if let baseview::WindowEvent::Resized(info) = win {
+                    match win {
+                        baseview::WindowEvent::Focused => {
+                            self.focused = true;
+                            self.pacer.reset();
+                            self.force_paint = true;
+                            return EventStatus::Captured;
+                        }
+                        baseview::WindowEvent::Unfocused => {
+                            self.focused = false;
+                            return EventStatus::Captured;
+                        }
+                        baseview::WindowEvent::Resized(info) => {
                         // In host-driven (plug-in) mode the host's reported
                         // scale is authoritative; baseview's echoed
                         // `info.scale()` is the value we pinned at creation. If
@@ -1258,8 +1281,10 @@ impl<P: Params + ?Sized + 'static> WindowHandler for EguiWindowHandler<P> {
                         self.pending_size
                             .store(pack_size(logical_size), Ordering::Relaxed);
                     }
-                    EventStatus::Ignored
+                    _ => {}
                 }
+                EventStatus::Ignored
+            }
             }
         }));
         match event_result {
@@ -1566,6 +1591,7 @@ impl<P: Params + 'static> Editor for EguiEditor<P> {
                     resize_burst_start: None,
                     last_size_change: None,
                     pacer: truce_gui::PaintPacer::default(),
+                    focused: true,
                     last_resize_phys: (0, 0),
                     last_resize_fitted: (0, 0),
                 }

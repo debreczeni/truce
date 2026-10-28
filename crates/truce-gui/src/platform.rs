@@ -232,6 +232,13 @@ impl PaintPacer {
     /// timeout is ~1 s) can't park the editor for a full second.
     const MAX_PACE: std::time::Duration = std::time::Duration::from_millis(250);
 
+    /// Instantly clear any hold and reset pace to zero.
+    /// Called when window gains focus or receives interactive input.
+    pub fn reset(&mut self) {
+        self.pace = std::time::Duration::ZERO;
+        self.not_before = None;
+    }
+
     /// Whether this tick's paint should be skipped: the previous
     /// acquire showed the compositor hasn't caught up yet.
     #[must_use]
@@ -243,7 +250,10 @@ impl PaintPacer {
     /// Record how long a paint's swapchain acquire blocked, scheduling
     /// the earliest next paint accordingly.
     pub fn record_acquire(&mut self, wait: std::time::Duration) {
-        self.pace = wait.max(self.pace.mul_f32(0.85));
+        // Fast recovery: when acquire is fast (< MIN_PACE), accelerate decay (50% per frame)
+        // rather than dragging through a sluggish 15% per-frame crawl through zeros.
+        let decay = if wait < Self::MIN_PACE { 0.5 } else { 0.85 };
+        self.pace = wait.max(self.pace.mul_f32(decay));
         self.not_before = (self.pace >= Self::MIN_PACE)
             .then(|| std::time::Instant::now() + self.pace.min(Self::MAX_PACE));
     }
@@ -658,4 +668,44 @@ pub unsafe fn create_wgpu_surface_from_hwnd(
         raw_window_handle: wgpu::rwh::RawWindowHandle::Win32(win32),
     };
     unsafe { instance.create_surface_unsafe(surface_target).ok() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_paint_pacer_reset() {
+        let mut pacer = PaintPacer::default();
+        assert!(!pacer.should_hold());
+
+        // A long acquire wait arms the pacer
+        pacer.record_acquire(std::time::Duration::from_millis(50));
+        assert!(pacer.should_hold());
+        assert!(pacer.pace >= std::time::Duration::from_millis(50));
+
+        // reset() instantly clears pacing
+        pacer.reset();
+        assert!(!pacer.should_hold());
+        assert_eq!(pacer.pace, std::time::Duration::ZERO);
+    }
+
+    #[test]
+    fn test_paint_pacer_fast_decay_on_low_wait() {
+        let mut pacer = PaintPacer::default();
+        pacer.record_acquire(std::time::Duration::from_millis(40));
+        assert!(pacer.should_hold());
+
+        // Fast wait drops pace by 50%
+        pacer.record_acquire(std::time::Duration::from_millis(0));
+        assert_eq!(pacer.pace, std::time::Duration::from_millis(20));
+
+        pacer.record_acquire(std::time::Duration::from_millis(0));
+        assert_eq!(pacer.pace, std::time::Duration::from_millis(10));
+
+        pacer.record_acquire(std::time::Duration::from_millis(0));
+        assert_eq!(pacer.pace, std::time::Duration::from_millis(5));
+        // Under MIN_PACE (8ms), should_hold becomes false
+        assert!(!pacer.should_hold());
+    }
 }
