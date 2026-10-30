@@ -2722,12 +2722,15 @@ unsafe extern "C" fn state_save<P: PluginExport>(
         // so the snapshot read reflects the edit. While active the audio
         // thread owns the plugin and drains the queue itself, so we must not
         // touch it here (read the snapshot only).
-        if !data.active.load(Ordering::Relaxed)
-            && let Some(deserialized) = data.pending_state.pop()
-        {
-            let mut instance = enter_plugin(&data.plugin);
-            state::apply_state(&mut *instance, &deserialized);
-            instance.republish_snapshot();
+        if !data.active.load(Ordering::Relaxed) {
+            if let Some(deserialized) = data.pending_state.pop() {
+                let mut instance = enter_plugin(&data.plugin);
+                state::apply_state(&mut *instance, &deserialized);
+                instance.republish_snapshot();
+            } else if data.snapshot.read().is_none() {
+                let mut instance = enter_plugin(&data.plugin);
+                instance.republish_snapshot();
+            }
         }
         let (ids, values) = data.params_arc.collect_values();
         // Read the custom state from the lock-free snapshot the audio

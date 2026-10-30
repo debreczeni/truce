@@ -142,7 +142,7 @@ impl<P: Params + 'static, S: Sample> HotShell<P, S> {
         // Drive reloads off the audio thread. The watcher polls the
         // dylib path and runs `reload()` itself when mtime advances.
         NativeLoader::spawn_watcher(&loader);
-        Self {
+        let mut shell = Self {
             params,
             loader,
             state,
@@ -158,7 +158,9 @@ impl<P: Params + 'static, S: Sample> HotShell<P, S> {
             reset_pending: false,
             latency_cache: AtomicU32::new(0),
             tail_cache: AtomicU32::new(0),
-        }
+        };
+        shell.republish_snapshot();
+        shell
     }
 
     /// Ensure `self.state` is a live allocation from the current dylib,

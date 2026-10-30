@@ -94,7 +94,7 @@ impl<P: Params + Default + 'static, L: PluginLogicCore<S, Params = P> + 'static,
         let init_ctx =
             InitContext::new(tasks.clone()).with_snapshot(SnapshotPublisher::new(&snapshots));
         let state = L::init(&params, &init_ctx);
-        Self {
+        let mut shell = Self {
             params,
             state,
             meters: MeterStore::new(),
@@ -104,7 +104,9 @@ impl<P: Params + Default + 'static, L: PluginLogicCore<S, Params = P> + 'static,
             sample_rate: 44100.0,
             tasks,
             _sample: std::marker::PhantomData,
-        }
+        };
+        shell.republish_snapshot();
+        shell
     }
 
     /// Shared meter storage handle - the GUI-thread-safe channel
