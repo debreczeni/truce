@@ -145,11 +145,19 @@ pub(crate) fn cmd_package_linux(args: &[String], selection: &SuiteSelection) -> 
     // `target/bundles/<triple>/manifest.toml`.
     let bundles_root = truce_build::target_dir(&root).join("bundles");
     let plans: Vec<(String, PathBuf, BundleManifest)> = if targets.is_empty() {
-        let manifest = BundleManifest::load(&bundles_root).map_err(CargoTruceError::from)?;
-        validate_manifest_triple(&manifest, &bundles_root, truce_build::host_triple())?;
+        let host_triple = truce_build::host_triple();
+        let host_dir = bundles_root.join(host_triple);
+        let (dir, manifest) = if host_dir.join("manifest.toml").exists() {
+            let m = BundleManifest::load(&host_dir).map_err(CargoTruceError::from)?;
+            (host_dir, m)
+        } else {
+            let m = BundleManifest::load(&bundles_root).map_err(CargoTruceError::from)?;
+            (bundles_root.clone(), m)
+        };
+        validate_manifest_triple(&manifest, &dir, host_triple)?;
         vec![(
             manifest.target_triple.clone(),
-            bundles_root.clone(),
+            dir,
             manifest,
         )]
     } else {

@@ -143,17 +143,17 @@ pub(crate) fn cmd_build(args: &[String]) -> Res {
 
     let extra_features: Vec<&str> = if shell_mode { vec!["shell"] } else { vec![] };
 
-    // Per-target staging plan. When the user passes one or more
-    // `--target <triple>` flags, each target builds + stages into
-    // `target/bundles/<triple>/`. With no `--target`, we keep the
-    // historical flat layout (`target/bundles/<filename>`) so existing
-    // macOS / Windows workflows that inspect that directory don't
-    // change shape.
+    // Per-target staging plan. Every target (whether passed explicitly via
+    // `--target <triple>` or defaulted to the host triple) builds + stages
+    // into its own `target/bundles/<triple>/` subdirectory. This prevents
+    // cross-platform shared filesystem collisions (e.g. macOS `.clap` directory
+    // bundle vs Linux `.clap` ELF shared library).
     let target_plans: Vec<TargetPlan<'_>> = if targets.is_empty() {
+        let triple = truce_build::host_triple().to_string();
         vec![TargetPlan {
             target: None,
-            stage_dir: bundles_dir.clone(),
-            triple: truce_build::host_triple().to_string(),
+            stage_dir: bundles_dir.join(&triple),
+            triple,
         }]
     } else {
         targets

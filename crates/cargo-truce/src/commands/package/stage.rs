@@ -623,9 +623,13 @@ pub(crate) fn stage_aax(
     no_pace_sign: bool,
 ) -> Res {
     let bundle_name = format!("{}.aaxplugin", p.file_stem());
-    let built = truce_build::target_dir(root)
-        .join("bundles")
-        .join(&bundle_name);
+    let bundles_dir = truce_build::target_dir(root).join("bundles");
+    let triple_bundle = bundles_dir.join(truce_build::host_triple()).join(&bundle_name);
+    let built = if triple_bundle.exists() {
+        triple_bundle
+    } else {
+        bundles_dir.join(&bundle_name)
+    };
     if !built.exists() {
         return Err(format!(
             "AAX bundle missing at {}. Call `emit_aax_bundle` from the package driver before staging.",
@@ -653,9 +657,13 @@ pub(crate) fn stage_aax(
 #[cfg(target_os = "macos")]
 pub(crate) fn stage_au3(root: &Path, p: &PluginDef, _config: &Config, staging: &Path) -> Res {
     let app_name = format!("{}.app", p.au3_app_name());
-    let built_app = truce_build::target_dir(root)
-        .join("bundles")
-        .join(&app_name);
+    let bundles_dir = truce_build::target_dir(root).join("bundles");
+    let triple_app = bundles_dir.join(truce_build::host_triple()).join(&app_name);
+    let built_app = if triple_app.exists() {
+        triple_app
+    } else {
+        bundles_dir.join(&app_name)
+    };
     if !built_app.exists() {
         return Err(format!(
             "AU v3 bundle missing at {}. Run `cargo truce build --au3 -p {}` first.",

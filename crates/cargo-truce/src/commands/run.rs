@@ -89,8 +89,12 @@ pub(crate) fn cmd_run(args: &[String]) -> Res {
         .unwrap_or_else(|| format!("{}-standalone", plugin.crate_name));
 
     let bundles_dir = truce_build::target_dir(&root).join("bundles");
-    fs_ctx::create_dir_all(&bundles_dir)?;
-    let staged = bundles_dir.join(standalone_bundle_name(&plugin.file_stem()));
+    let host_triple = truce_build::host_triple();
+    let bundle_name = standalone_bundle_name(&plugin.file_stem());
+    let staged = bundles_dir.join(host_triple).join(&bundle_name);
+    if let Some(parent) = staged.parent() {
+        fs_ctx::create_dir_all(parent)?;
+    }
 
     if !no_build {
         eprintln!("Building {} standalone...", plugin.name);
