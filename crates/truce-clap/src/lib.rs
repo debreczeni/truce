@@ -678,9 +678,17 @@ unsafe extern "C" fn clap_plugin_activate<P: PluginExport>(
             // not the placeholder-rate value from create. No dirty flag:
             // this is the baseline the host reads at activate, not a
             // mid-session change needing changed() / request_restart.
-            data.latency_cache
-                .store(instance.latency(), Ordering::Relaxed);
+            let new_latency = instance.latency();
+            let old_latency = data.latency_cache.swap(new_latency, Ordering::Relaxed);
             data.tail_cache.store(instance.tail(), Ordering::Relaxed);
+            data.latency_dirty.store(false, Ordering::Relaxed);
+            if old_latency != new_latency
+                && !data.host_latency.is_null()
+                && !data.host.is_null()
+                && let Some(changed) = (*data.host_latency).changed
+            {
+                changed(data.host);
+            }
         }
 
         // Pre-grow the widening / narrowing scratch so no host wire /
@@ -792,16 +800,11 @@ unsafe extern "C" fn clap_plugin_on_main_thread<P: PluginExport>(plugin: *const 
             rescan(data.host, CLAP_PARAM_RESCAN_VALUES);
         }
 
-        // Latency changed on the audio thread: tell the host here, off
-        // the audio thread. `changed()` re-reads our reported latency;
-        // an active plugin additionally needs `request_restart` to apply
-        // the new delay compensation.
+        // Latency changed on the audio thread: request restart from host.
+        // In CLAP, `host_latency.changed` is strictly restricted to
+        // [being-activated] inside `activate()`. For an active plugin,
+        // latency changes must be signaled via `request_restart()`.
         if data.latency_dirty.swap(false, Ordering::Relaxed) && !data.host.is_null() {
-            if !data.host_latency.is_null()
-                && let Some(changed) = (*data.host_latency).changed
-            {
-                changed(data.host);
-            }
             if data.active.load(Ordering::Relaxed)
                 && let Some(req_restart) = (*data.host).request_restart
             {
@@ -2811,6 +2814,13 @@ unsafe extern "C" fn state_load<P: PluginExport>(
         // first running a process block - clap-validator reads back
         // immediately after a load round-trip.
         state::apply_params(&*data.params_arc, &deserialized);
+
+        if !data.host_params.is_null()
+            && !data.host.is_null()
+            && let Some(rescan) = (*data.host_params).rescan
+        {
+            rescan(data.host, CLAP_PARAM_RESCAN_VALUES);
+        }
 
         if data.active.load(Ordering::Relaxed) {
             // Active: the audio thread will drain `pending_state` at the
