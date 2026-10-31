@@ -289,11 +289,11 @@ struct TarballCtx<'a> {
     arch: &'a str,
 }
 
-/// One tarball per plugin: `{crate_name}-{version}-linux-{arch}.tar.gz`.
+/// One tarball per plugin: `{crate_name}-v{version}-linux-{arch}.tar.gz`.
 /// Uses `crate_name` (not `bundle_id`) so the dist filename matches
 /// the macOS `.pkg` / Windows `.exe` produced for the same plugin.
 fn build_per_plugin_tarball(ctx: &TarballCtx<'_>, plugin: &PluginDef) -> Res {
-    let stem = format!("{}-{}-linux-{}", plugin.crate_name, ctx.version, ctx.arch);
+    let stem = format!("{}-v{}-linux-{}", plugin.crate_name, ctx.version, ctx.arch);
     let staging = plugin_stage_dir(ctx.root, &plugin.bundle_id, ctx.arch)?;
 
     let plugin_summary = stage_plugin_payload(
@@ -326,11 +326,11 @@ fn build_per_plugin_tarball(ctx: &TarballCtx<'_>, plugin: &PluginDef) -> Res {
     Ok(())
 }
 
-/// One tarball per suite: `{suite.bundle_id}-{version}-linux-{arch}.tar.gz`.
+/// One tarball per suite: `{suite.bundle_id}-v{version}-linux-{arch}.tar.gz`.
 fn build_suite_tarball(ctx: &TarballCtx<'_>, suite: &ResolvedSuite<'_>) -> Res {
     let suite_version = suite.def.version.as_deref().unwrap_or(ctx.version);
     let stem = format!(
-        "{}-{}-linux-{}",
+        "{}-v{}-linux-{}",
         suite.def.bundle_id, suite_version, ctx.arch
     );
     let staging = suite_stage_dir(ctx.root, &suite.def.bundle_id, ctx.arch)?;

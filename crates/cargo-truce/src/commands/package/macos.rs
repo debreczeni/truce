@@ -420,7 +420,7 @@ fn package_one_suite(
 
     // productbuild → final suite .pkg.
     let pkg_name = format!(
-        "{}-{}-macos{}.pkg",
+        "{}-v{}-macos{}.pkg",
         suite.def.bundle_id,
         suite_version,
         o.scope.dist_suffix(),
@@ -1237,7 +1237,7 @@ fn run_productbuild(
     // bundle name + Info.plist `CFBundleName` etc. on `p.name` - only
     // the dist artifact's filename changes.
     let pkg_name = format!(
-        "{}-{}-macos{}.pkg",
+        "{}-v{}-macos{}.pkg",
         p.crate_name,
         o.version,
         o.scope.dist_suffix()

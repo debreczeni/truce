@@ -267,7 +267,7 @@ pub(crate) fn cmd_package_windows(args: &[String], selection: &super::SuiteSelec
         run_iscc(&iss_path)?;
 
         let installer = dist_dir.join(format!(
-            "{}-{}-windows{}.exe",
+            "{}-v{}-windows{}.exe",
             p.crate_name,
             version,
             scope.dist_suffix()
@@ -1524,7 +1524,7 @@ fn render_iss(
     // (set above as the `AppName`); only the .exe filename changes.
     let _ = write!(
         setup,
-        "OutputBaseFilename={}-{}-windows\r\n",
+        "OutputBaseFilename={}-v{}-windows\r\n",
         iss_escape_directive(&p.crate_name),
         iss_escape_directive(version),
     );
@@ -1764,7 +1764,7 @@ fn package_one_suite(
     run_iscc(&iss_path)?;
 
     let installer = dist_dir.join(format!(
-        "{}-{}-windows{}.exe",
+        "{}-v{}-windows{}.exe",
         suite.def.bundle_id,
         suite_version,
         scope.dist_suffix()
@@ -1990,7 +1990,7 @@ fn write_suite_setup_section(
     let _ = write!(setup, "OutputDir={}\r\n", iss_escape_path(dist_dir));
     let _ = write!(
         setup,
-        "OutputBaseFilename={}-{}-windows\r\n",
+        "OutputBaseFilename={}-v{}-windows\r\n",
         iss_escape_directive(&suite.def.bundle_id),
         iss_escape_directive(version),
     );
