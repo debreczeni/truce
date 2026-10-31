@@ -777,6 +777,24 @@ pub(crate) fn stage_standalone(root: &Path, p: &PluginDef, config: &Config, stag
         false,
     )?;
 
+    // Also mirror the signed .app into target/bundles/ so standalone is available
+    // in the bundles directory alongside the plugin formats.
+    let bundles_dir = truce_build::target_dir(root).join("bundles");
+    if bundles_dir.exists() {
+        let app_name = format!("{}.app", p.file_stem());
+        for sub in &["aarch64-apple-darwin", "x86_64-apple-darwin"] {
+            let arch_dir = bundles_dir.join(sub);
+            if arch_dir.exists() {
+                let dst = arch_dir.join(&app_name);
+                let _ = fs::remove_dir_all(&dst);
+                let _ = copy_dir_recursive(&staged_app, &dst);
+            }
+        }
+        let root_dst = bundles_dir.join(&app_name);
+        let _ = fs::remove_dir_all(&root_dst);
+        let _ = copy_dir_recursive(&staged_app, &root_dst);
+    }
+
     Ok(())
 }
 
