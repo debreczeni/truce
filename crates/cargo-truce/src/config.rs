@@ -191,6 +191,11 @@ pub(crate) struct PluginDef {
     #[serde(default)]
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) macos_icon: Option<String>,
+    /// Per-plugin Linux app icon (`.png`, path relative to workspace
+    /// root). Staged into the package tarball and installed to the
+    /// user/system freedesktop icon directory with matching .desktop entry.
+    #[serde(default)]
+    pub(crate) linux_icon: Option<String>,
     /// App Group identifier for cross-process preset / state sharing
     /// between the container `.app` and the `.appex`. When present,
     /// adds `com.apple.security.application-groups` to both
@@ -670,6 +675,7 @@ mod suite_tests {
             au_tag: default_au_tag(),
             windows_icon: None,
             macos_icon: None,
+            linux_icon: None,
             ios_app_group: None,
             ios_icon_set: None,
             ios_minimum_os_version: None,

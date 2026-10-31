@@ -55,6 +55,7 @@ USER_LV2_DIR="${USER_BASE_HOME}/.lv2"
 USER_VST_DIR="${USER_BASE_HOME}/.vst"
 USER_BIN_DIR="${USER_BASE_HOME}/.local/bin"
 USER_DESKTOP_DIR="${USER_BASE_HOME}/.local/share/applications"
+USER_ICON_DIR="${USER_BASE_HOME}/.local/share/icons/hicolor/512x512/apps"
 
 SYSTEM_CLAP_DIR="/usr/lib/clap"
 SYSTEM_VST3_DIR="/usr/lib/vst3"
@@ -62,6 +63,7 @@ SYSTEM_LV2_DIR="/usr/lib/lv2"
 SYSTEM_VST_DIR="/usr/lib/vst"
 SYSTEM_BIN_DIR="/usr/bin"
 SYSTEM_DESKTOP_DIR="/usr/share/applications"
+SYSTEM_ICON_DIR="/usr/share/icons/hicolor/512x512/apps"
 
 SCOPE="user"
 DRY_RUN=0
@@ -209,6 +211,7 @@ install_standalone_presets() {
 install_standalone() {
     src="$1"     # path inside the tarball
     bin_name="$2"
+    icon_src="${3:-}"
     if ! format_selected "standalone"; then
         return 0
     fi
@@ -216,25 +219,37 @@ install_standalone() {
     if [ "$SCOPE" = "system" ]; then
         bin_dst="$SYSTEM_BIN_DIR/$bin_name"
         desktop_dst="$SYSTEM_DESKTOP_DIR/$bin_name.desktop"
+        icon_dst="$SYSTEM_ICON_DIR/$bin_name.png"
     else
         bin_dst="$USER_BIN_DIR/$bin_name"
         desktop_dst="$USER_DESKTOP_DIR/$bin_name.desktop"
+        icon_dst="$USER_ICON_DIR/$bin_name.png"
     fi
     echo "    -> standalone: $bin_dst"
     do_copy "$src" "$bin_dst"
     if [ "$DRY_RUN" -eq 0 ]; then
+        icon_line=""
+        if [ -n "$icon_src" ] && [ -e "$icon_src" ]; then
+            $SUDO mkdir -p "$(dirname "$icon_dst")"
+            do_copy "$icon_src" "$icon_dst"
+            icon_line="Icon=$bin_name"
+        fi
         $SUDO mkdir -p "$(dirname "$desktop_dst")"
         $SUDO sh -c "cat > '$desktop_dst' <<EOF
 [Desktop Entry]
 Type=Application
 Name=$bin_name
 Exec=$bin_dst
+${icon_line}
 Categories=Audio;Music;
 EOF"
         # Refresh the desktop-entry cache where available; not fatal
         # if the tool is absent.
         if command -v update-desktop-database >/dev/null 2>&1; then
             $SUDO update-desktop-database "$(dirname "$desktop_dst")" 2>/dev/null || true
+        fi
+        if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            $SUDO gtk-update-icon-cache -f -t "$(dirname "$(dirname "$(dirname "$icon_dst")")")" 2>/dev/null || true
         fi
     fi
 }

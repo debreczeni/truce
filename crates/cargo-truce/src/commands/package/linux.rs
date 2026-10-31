@@ -388,6 +388,9 @@ fn expected_tarball_paths(stem: &str, summaries: &[&PluginSummary]) -> Vec<Strin
         if let Some(bin) = &s.standalone {
             paths.push(format!("{stem}/standalone/{bin}"));
         }
+        if let Some(icon) = &s.icon {
+            paths.push(format!("{stem}/{icon}"));
+        }
     }
     paths
 }
@@ -421,6 +424,10 @@ struct PluginSummary {
     /// the installed binary - where the standalone resolves factory
     /// presets at runtime.
     standalone_presets: Option<String>,
+    /// Tarball-relative path of the plugin app icon (`icons/<name>.png`),
+    /// when the plugin sets `linux_icon`. install.sh installs it to the
+    /// freedesktop hicolor icon theme.
+    icon: Option<String>,
 }
 
 struct BundleEntry {
@@ -555,6 +562,21 @@ fn stage_plugin_payload(
         None
     };
 
+    let icon = if let Some(icon_rel) = &plugin.linux_icon {
+        let icon_src = root.join(icon_rel);
+        if icon_src.exists() {
+            let icon_dst_dir = staging.join("icons");
+            fs::create_dir_all(&icon_dst_dir)?;
+            let icon_filename = format!("{}.png", plugin.crate_name);
+            fs::copy(&icon_src, icon_dst_dir.join(&icon_filename))?;
+            Some(format!("icons/{icon_filename}"))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     if bundles.is_empty() && standalone.is_none() {
         return Err(format!(
             "no bundles or standalone for {} in {}. \
@@ -575,6 +597,7 @@ fn stage_plugin_payload(
         clap_presets,
         vst3_presets,
         standalone_presets,
+        icon,
     })
 }
 
@@ -791,7 +814,12 @@ fn format_plugin_case(p: &PluginSummary) -> String {
     }
     if let Some(bin) = &p.standalone {
         let q = sh_quote(bin);
-        let _ = writeln!(s, "        install_standalone \"standalone/\"{q} {q}");
+        if let Some(icon) = &p.icon {
+            let iq = sh_quote(icon);
+            let _ = writeln!(s, "        install_standalone \"standalone/\"{q} {q} {iq}");
+        } else {
+            let _ = writeln!(s, "        install_standalone \"standalone/\"{q} {q}");
+        }
         if let Some(src) = &p.standalone_presets {
             let _ = writeln!(
                 s,
