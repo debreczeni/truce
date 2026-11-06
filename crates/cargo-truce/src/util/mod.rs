@@ -817,7 +817,7 @@ pub(crate) fn project_root() -> PathBuf {
 /// no other supported platform has a sensible analogue.
 #[cfg(target_os = "macos")]
 pub(crate) fn run_sudo(cmd: &str, args: &[&OsStr]) -> crate::Res {
-    announce_sudo_once();
+    announce_sudo_for_args(cmd, args);
     let status = Command::new("sudo").arg(cmd).args(args).status()?;
     if !status.success() {
         return Err(crate::CargoTruceError::Other(format!(
@@ -827,17 +827,54 @@ pub(crate) fn run_sudo(cmd: &str, args: &[&OsStr]) -> crate::Res {
     Ok(())
 }
 
+static ANNOUNCED_SUDO: AtomicBool = AtomicBool::new(false);
+
 /// Print a one-line "why" before the first `sudo` call of the run, so the
 /// user understands the password prompt that's about to appear. No-op on
-/// subsequent calls - sudo's own cred cache covers the rest of the install.
+/// subsequent calls - sudo's own cred cache covers the rest of the run.
 #[cfg(target_os = "macos")]
-fn announce_sudo_once() {
-    static ANNOUNCED: AtomicBool = AtomicBool::new(false);
-    if !ANNOUNCED.swap(true, Ordering::Relaxed) {
-        eprintln!(
-            "→ Installing to system plugin directories (/Library/Audio/Plug-Ins/, \
-             /Library/Application Support/Avid/) - sudo required."
-        );
+pub(crate) fn announce_sudo(reason: &str) {
+    if !ANNOUNCED_SUDO.swap(true, Ordering::Relaxed) {
+        eprintln!("→ {reason} - sudo required.");
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn announce_sudo_for_args(cmd: &str, args: &[&OsStr]) {
+    if ANNOUNCED_SUDO.load(Ordering::Relaxed) {
+        return;
+    }
+
+    // Inspect args to identify which system directory or purpose is being accessed.
+    for arg in args {
+        let path = arg.to_string_lossy();
+        if path.starts_with("/Applications") {
+            let app_name = Path::new(&*path)
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .filter(|n| n.ends_with(".app"));
+            if let Some(app) = app_name {
+                announce_sudo(&format!("Installing AU v3 container to /Applications/{app}"));
+            } else {
+                announce_sudo("Installing AU v3 container to /Applications/");
+            }
+            return;
+        } else if path.contains("/Library/Application Support/Avid") {
+            announce_sudo("Installing AAX to /Library/Application Support/Avid/");
+            return;
+        } else if path.contains("/Library/Audio/Plug-Ins") {
+            announce_sudo("Installing to system plugin directory (/Library/Audio/Plug-Ins/)");
+            return;
+        } else if path.contains("/Library/Audio/Presets") {
+            announce_sudo("Installing presets to system directory (/Library/Audio/Presets/)");
+            return;
+        }
+    }
+
+    if cmd == "rm" {
+        announce_sudo("Removing files from system directories");
+    } else {
+        announce_sudo("Modifying system directory");
     }
 }
 
@@ -954,7 +991,7 @@ pub(crate) fn run_codesign(args: &[&OsStr], use_sudo: bool) -> crate::Res {
     };
 
     let mut cmd = if use_sudo {
-        announce_sudo_once();
+        announce_sudo("Codesigning bundle with elevated privileges");
         let mut c = Command::new("sudo");
         c.arg("codesign");
         c

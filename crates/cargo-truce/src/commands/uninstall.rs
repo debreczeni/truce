@@ -686,6 +686,7 @@ pub(crate) fn cmd_uninstall(args: &[String]) -> Res {
             #[cfg(target_os = "macos")]
             {
                 if t.needs_sudo {
+                    crate::announce_sudo("Removing plugin bundles from system directories");
                     run_sudo("rm", &[OsStr::new("-rf"), t.path.as_os_str()])
                 } else {
                     fs::remove_dir_all(&t.path)

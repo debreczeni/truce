@@ -54,7 +54,7 @@ pub(crate) use util::{
 // no meaningful implementation off macOS - the cfg gate forces callers to
 // stay platform-aware rather than silently spawning a missing binary.
 #[cfg(target_os = "macos")]
-pub(crate) use util::run_sudo;
+pub(crate) use util::{announce_sudo, run_sudo};
 // `tmp_dir` is the raw escape hatch - used by `reset_au` (macOS only)
 // to walk every subdir under `tmp/`. Most callers pick the typed
 // helper that matches their purpose (`tmp_manifests`, `tmp_lv2`, …).
