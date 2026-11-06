@@ -78,6 +78,26 @@ pub fn reanchor_to_superview_top(handle: raw_window_handle::RawWindowHandle) {
             y: new_y,
         };
         let _: () = msg_send![view, setFrameOrigin: new_origin];
+
+        // Pin contents to top-left so window resizing does not squeeze/stretch the layer contents during transitions
+        let layer: *mut objc::runtime::Object = msg_send![view, layer];
+        if !layer.is_null() {
+            if let Some(cls) = objc::runtime::Class::get("NSString") {
+                let top_left: *mut objc::runtime::Object = msg_send![cls, stringWithUTF8String: b"topLeft\0".as_ptr()];
+                if !top_left.is_null() {
+                    let _: () = msg_send![layer, setContentsGravity: top_left];
+                }
+            }
+        }
+        let superview_layer: *mut objc::runtime::Object = msg_send![superview, layer];
+        if !superview_layer.is_null() {
+            if let Some(cls) = objc::runtime::Class::get("NSString") {
+                let top_left: *mut objc::runtime::Object = msg_send![cls, stringWithUTF8String: b"topLeft\0".as_ptr()];
+                if !top_left.is_null() {
+                    let _: () = msg_send![superview_layer, setContentsGravity: top_left];
+                }
+            }
+        }
     }
 }
 

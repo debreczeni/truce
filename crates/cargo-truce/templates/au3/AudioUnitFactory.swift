@@ -1227,6 +1227,10 @@ class AudioUnitFactory: AUViewController, AUAudioUnitFactory {
         for sub in self.view.subviews { sub.removeFromSuperview() }
         self.view.addSubview(container)
         guiContainer = container
+        #if os(macOS)
+        container.layer?.contentsGravity = .topLeft
+        self.view.layer?.contentsGravity = .topLeft
+        #endif
         self.preferredContentSize = guiPtSize
         guiSetUp = true
         #if os(iOS)
@@ -1439,6 +1443,25 @@ class AudioUnitFactory: AUViewController, AUAudioUnitFactory {
             }
         }
         au.isSyncingToHost = false
+
+        // Check if the Rust editor resized itself (e.g. drawer opened/closed or zoom factor changed)
+        if guiSetUp {
+            var actW: UInt32 = 0, actH: UInt32 = 0
+            cb.pointee.gui_get_size(ctx, &actW, &actH)
+            if actW > 0 && actH > 0 {
+                let newSize = NSSize(width: CGFloat(actW), height: CGFloat(actH))
+                if newSize != guiPtSize {
+                    guiPtSize = newSize
+                    guiContainer?.frame = NSRect(origin: .zero, size: guiPtSize)
+                    self.preferredContentSize = guiPtSize
+                    #if os(iOS)
+                    fitGUIToSafeArea()
+                    #else
+                    centerGUI()
+                    #endif
+                }
+            }
+        }
 
         // Push a latency change (if any) to the host on the same
         // main-thread tick.
