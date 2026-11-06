@@ -700,7 +700,8 @@ impl<P: Params + ?Sized> EguiWindowHandler<P> {
         #[allow(clippy::cast_precision_loss)]
         let (lw, lh) = {
             let (fw, fh) = self.size;
-            (fw as f32, fh as f32)
+            let zoom = self.egui_ctx.zoom_factor().max(0.1);
+            (fw as f32 / zoom, fh as f32 / zoom)
         };
 
         let mut raw_input = egui::RawInput {
@@ -1044,11 +1045,15 @@ impl<P: Params + ?Sized + 'static> WindowHandler for EguiWindowHandler<P> {
                             modifiers,
                         } => {
                             self.modifiers = convert_kb_modifiers(modifiers);
+                            let zoom = self.egui_ctx.zoom_factor().max(0.1);
                             // baseview reports cursor in f64 logical points;
-                            // egui uses f32. Window dimensions never reach
+                            // egui uses f32 scaled by zoom_factor. Window dimensions never reach
                             // 2^23 - the narrowing is invisible.
                             #[allow(clippy::cast_possible_truncation)]
-                            let pos = egui::pos2(position.x as f32, position.y as f32);
+                            let pos = egui::pos2(
+                                (position.x as f32) / zoom,
+                                (position.y as f32) / zoom,
+                            );
                             self.last_cursor_pos = pos;
                             self.pending_events.push(egui::Event::PointerMoved(pos));
                             EventStatus::Captured
@@ -1096,9 +1101,10 @@ impl<P: Params + ?Sized + 'static> WindowHandler for EguiWindowHandler<P> {
                         }
                         WheelScrolled { delta, modifiers } => {
                             self.modifiers = convert_kb_modifiers(modifiers);
+                            let zoom = self.egui_ctx.zoom_factor().max(0.1);
                             let (dx, dy) = match delta {
                                 baseview::ScrollDelta::Lines { x, y } => (x * 20.0, y * 20.0),
-                                baseview::ScrollDelta::Pixels { x, y } => (x, y),
+                                baseview::ScrollDelta::Pixels { x, y } => (x / zoom, y / zoom),
                             };
                             self.pending_events.push(egui::Event::MouseWheel {
                                 unit: egui::MouseWheelUnit::Point,
