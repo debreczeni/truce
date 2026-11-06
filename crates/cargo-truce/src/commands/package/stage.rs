@@ -782,17 +782,24 @@ pub(crate) fn stage_standalone(root: &Path, p: &PluginDef, config: &Config, stag
     let bundles_dir = truce_build::target_dir(root).join("bundles");
     if bundles_dir.exists() {
         let app_name = format!("{}.app", p.file_stem());
+        let is_same_path = |a: &Path, b: &Path| -> bool {
+            a == b || (a.exists() && b.exists() && a.canonicalize().ok() == b.canonicalize().ok())
+        };
         for sub in &["aarch64-apple-darwin", "x86_64-apple-darwin"] {
             let arch_dir = bundles_dir.join(sub);
             if arch_dir.exists() {
                 let dst = arch_dir.join(&app_name);
-                let _ = fs::remove_dir_all(&dst);
-                let _ = copy_dir_recursive(&staged_app, &dst);
+                if !is_same_path(&dst, &staged_app) {
+                    let _ = fs::remove_dir_all(&dst);
+                    let _ = copy_dir_recursive(&staged_app, &dst);
+                }
             }
         }
         let root_dst = bundles_dir.join(&app_name);
-        let _ = fs::remove_dir_all(&root_dst);
-        let _ = copy_dir_recursive(&staged_app, &root_dst);
+        if !is_same_path(&root_dst, &staged_app) {
+            let _ = fs::remove_dir_all(&root_dst);
+            let _ = copy_dir_recursive(&staged_app, &root_dst);
+        }
     }
 
     Ok(())
