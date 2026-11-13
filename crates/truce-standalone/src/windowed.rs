@@ -427,7 +427,7 @@ where
             #[cfg(target_os = "macos")]
             editor_reports_size: true,
             #[cfg(target_os = "macos")]
-            editor_min_max: (editor_limits.0, editor_limits.1),
+            editor_limits,
             #[cfg(target_os = "linux")]
             size_hints_scale: 0.0,
             _plugin: plugin,
@@ -476,14 +476,16 @@ where
     /// size). Updated wherever `set_size` is called.
     #[cfg(target_os = "macos")]
     editor_reports_size: bool,
-    /// Editor min / max snapshot for the per-frame out-of-bounds check.
+    /// Editor min / max / aspect-ratio snapshot for the per-frame
+    /// out-of-bounds check and dynamic AppKit constraint syncing.
     /// `AppKit`'s `contentMinSize` / `contentMaxSize` only bound drags
     /// and zoom; a programmatic `setFrame:` bypasses them, so the
     /// `on_frame` poll snaps such a frame back (the counterpart of the
     /// Windows `WM_GETMINMAXINFO` subclass, which covers programmatic
-    /// resizes natively).
+    /// resizes natively). Refreshing when any tuple member changes
+    /// keeps drawer toggles and dynamic aspect ratios accurate.
     #[cfg(target_os = "macos")]
-    editor_min_max: ((u32, u32), (u32, u32)),
+    editor_limits: ((u32, u32), (u32, u32), Option<(u32, u32)>),
     /// Scale factor the X11 WM min/max size hints were last computed
     /// at, or `0.0` if they haven't been set yet. The editor's
     /// min/max bounds are logical, so the physical-pixel hints the WM
@@ -527,6 +529,58 @@ where
     /// header.
     #[cfg(feature = "playback")]
     _capture: Option<crate::playback::CaptureSink>,
+}
+
+#[cfg(target_os = "macos")]
+impl<P: PluginExport + 'static> StandaloneHandler<P>
+where
+    P::Params: 'static,
+{
+    fn sync_macos_limits(&mut self, ns_window: *mut std::ffi::c_void) {
+        if !self.editor.can_resize() {
+            return;
+        }
+        let live_limits = (
+            self.editor.min_size(),
+            self.editor.max_size(),
+            self.editor.aspect_ratio(),
+        );
+        if live_limits != self.editor_limits {
+            self.editor_limits = live_limits;
+            // SAFETY: `ns_window` is the live standalone NSWindow on the main thread.
+            unsafe {
+                crate::windowed_macos::install_content_limits(
+                    ns_window,
+                    live_limits.0,
+                    live_limits.1,
+                    live_limits.2,
+                );
+            }
+        }
+    }
+
+    fn reconcile_macos_child(&self, ns_view: *mut std::ffi::c_void, outer_size: (u32, u32)) {
+        if !self.editor.can_resize() {
+            return;
+        }
+        let (cw, ch) = if self.editor_reports_size {
+            self.editor.size()
+        } else {
+            outer_size
+        };
+        if cw > 0 && ch > 0 {
+            // SAFETY: `ns_view` is the live baseview view; we're on the main thread.
+            unsafe {
+                crate::windowed_macos::layout_child_centered(
+                    ns_view,
+                    cw,
+                    ch,
+                    outer_size.0,
+                    outer_size.1,
+                );
+            }
+        }
+    }
 }
 
 /// Resize the outer standalone window so its client area becomes
@@ -585,6 +639,7 @@ where
             && os_size.0 > 0
             && os_size.1 > 0
         {
+            self.sync_macos_limits(h.ns_window);
             // A programmatic `setFrame:` bypasses AppKit's
             // `contentMinSize` / `contentMaxSize`; snap an out-of-bounds
             // frame back to the clamped size (deferred via baseview's
@@ -592,7 +647,7 @@ where
             // no-op, so the correction can't loop. The editor is
             // forwarded the clamped size below either way, so it never
             // renders out of bounds.
-            let ((min_w, min_h), (max_w, max_h)) = self.editor_min_max;
+            let ((min_w, min_h), (max_w, max_h), _) = self.editor_limits;
             let os_size = {
                 // Guard `clamp`'s min <= max precondition: an editor
                 // whose reported max is below its min (inconsistent
@@ -616,31 +671,10 @@ where
                 self.current_size = os_size;
                 self.editor_reports_size = self.editor.set_size(os_size.0, os_size.1);
             }
-            // Re-pin the child frame every frame. The autoresize centering
-            // mask moves the (old-size) child toward the centre as the
-            // window grows, and the editor's own child-window resize then
-            // grows it in place - keeping that shifted origin; a
-            // `Resized`-event resize never corrects it either. Left as-is
-            // the child overhangs one edge and exposes an unpainted margin
-            // on the other. Re-centre at the editor's rendered size
-            // (window size for vizia, whose child fills via baseview).
-            // `layout_child_centered` no-ops once the frame matches.
-            if self.editor.can_resize() {
-                let (cw, ch) = if self.editor_reports_size {
-                    self.editor.size()
-                } else {
-                    os_size
-                };
-                if cw > 0 && ch > 0 {
-                    // SAFETY: `h.ns_view` is the live baseview view; we're
-                    // on the main thread and the child is settled.
-                    unsafe {
-                        crate::windowed_macos::layout_child_centered(
-                            h.ns_view, cw, ch, os_size.0, os_size.1,
-                        );
-                    }
-                }
-            }
+            // Re-pin the child frame every frame so it tracks the
+            // editor's rendered size without AppKit centering margins
+            // leaving an offset or unfilled border.
+            self.reconcile_macos_child(h.ns_view, os_size);
         }
 
         // Re-centre the editor child within the outer window when the
@@ -779,6 +813,11 @@ where
                         self.current_size = (ew, eh);
                         resize_outer_window(window, ew, eh);
                     }
+                }
+                #[cfg(target_os = "macos")]
+                if let RwhHandle::AppKit(h) = window.raw_window_handle() {
+                    self.sync_macos_limits(h.ns_window);
+                    self.reconcile_macos_child(h.ns_view, self.current_size);
                 }
                 #[cfg(target_os = "linux")]
                 let _ = accepted;

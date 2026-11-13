@@ -119,6 +119,13 @@ pub unsafe fn install_content_limits(
             height: f64::from(denom),
         };
         let _: () = unsafe { msg_send![window, setContentAspectRatio: ratio] };
+    } else {
+        // Clear any prior contentAspectRatio lock when the editor drops it.
+        let unit = NsSize {
+            width: 1.0,
+            height: 1.0,
+        };
+        let _: () = unsafe { msg_send![window, setContentResizeIncrements: unit] };
     }
 }
 

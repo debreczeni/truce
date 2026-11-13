@@ -67,17 +67,19 @@ pub fn reanchor_to_superview_top(handle: raw_window_handle::RawWindowHandle) {
         if superview.is_null() {
             return;
         }
-        let parent_frame: NsRect = msg_send![superview, frame];
-        let child_frame: NsRect = msg_send![view, frame];
-        let new_y = parent_frame.size.height - child_frame.size.height;
-        if (new_y - child_frame.origin.y).abs() < f64::EPSILON {
-            return;
+        let super_flipped: objc::runtime::BOOL = msg_send![superview, isFlipped];
+        if super_flipped == objc::runtime::NO {
+            let parent_frame: NsRect = msg_send![superview, frame];
+            let child_frame: NsRect = msg_send![view, frame];
+            let new_y = parent_frame.size.height - child_frame.size.height;
+            if (new_y - child_frame.origin.y).abs() >= f64::EPSILON {
+                let new_origin = NsPoint {
+                    x: child_frame.origin.x,
+                    y: new_y,
+                };
+                let _: () = msg_send![view, setFrameOrigin: new_origin];
+            }
         }
-        let new_origin = NsPoint {
-            x: child_frame.origin.x,
-            y: new_y,
-        };
-        let _: () = msg_send![view, setFrameOrigin: new_origin];
 
         // Pin contents to top-left so window resizing does not squeeze/stretch the layer contents during transitions
         let layer: *mut objc::runtime::Object = msg_send![view, layer];
@@ -207,6 +209,10 @@ pub fn reanchor_all_children_to_top(parent: *mut std::ffi::c_void) {
         // guard in `should_skip_frame`.
         let window: *mut Object = msg_send![parent_obj, window];
         if window.is_null() {
+            return;
+        }
+        let parent_flipped: objc::runtime::BOOL = msg_send![parent_obj, isFlipped];
+        if parent_flipped != objc::runtime::NO {
             return;
         }
         let parent_frame: NsRect = msg_send![parent_obj, frame];
