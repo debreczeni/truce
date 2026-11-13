@@ -1228,8 +1228,18 @@ class AudioUnitFactory: AUViewController, AUAudioUnitFactory {
         self.view.addSubview(container)
         guiContainer = container
         #if os(macOS)
+        container.wantsLayer = true
         container.layer?.contentsGravity = .topLeft
+        self.view.wantsLayer = true
         self.view.layer?.contentsGravity = .topLeft
+        let disabledActions: [String: Any] = [
+            "bounds": NSNull(),
+            "position": NSNull(),
+            "frame": NSNull(),
+            "contents": NSNull()
+        ]
+        container.layer?.actions = disabledActions
+        self.view.layer?.actions = disabledActions
         #endif
         self.preferredContentSize = guiPtSize
         guiSetUp = true
@@ -1402,6 +1412,8 @@ class AudioUnitFactory: AUViewController, AUAudioUnitFactory {
         // top edge of the visible plug-in window.
         #if os(macOS)
         let y = hostH - guiPtSize.height
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         #else
         // UIKit uses flipped coords (origin top-left): the natural
         // anchor for "top" is already y = 0, so the `max(0, ...)`
@@ -1410,6 +1422,9 @@ class AudioUnitFactory: AUViewController, AUAudioUnitFactory {
         #endif
         container.frame = NSRect(x: x, y: y,
                                  width: guiPtSize.width, height: guiPtSize.height)
+        #if os(macOS)
+        CATransaction.commit()
+        #endif
     }
 
     // MARK: - Parameter sync (GUI ↔ host)
@@ -1452,12 +1467,19 @@ class AudioUnitFactory: AUViewController, AUAudioUnitFactory {
                 let newSize = NSSize(width: CGFloat(actW), height: CGFloat(actH))
                 if newSize != guiPtSize {
                     guiPtSize = newSize
+                    #if os(macOS)
+                    CATransaction.begin()
+                    CATransaction.setDisableActions(true)
+                    #endif
                     guiContainer?.frame = NSRect(origin: .zero, size: guiPtSize)
                     self.preferredContentSize = guiPtSize
                     #if os(iOS)
                     fitGUIToSafeArea()
                     #else
                     centerGUI()
+                    #endif
+                    #if os(macOS)
+                    CATransaction.commit()
                     #endif
                 }
             }
