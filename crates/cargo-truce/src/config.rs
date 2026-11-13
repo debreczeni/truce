@@ -46,6 +46,9 @@ pub(crate) struct Config {
     #[serde(default)]
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) packaging: PackagingConfig,
+    /// Workspace-wide preset branding & format defaults (`[presets]`).
+    #[serde(default)]
+    pub(crate) presets: truce_build::GlobalPresetsConfig,
     /// Suite installers - repeatable. Each entry produces one
     /// installer per platform that bundles the listed plugins.
     /// Empty = per-plugin output only (today's behaviour).

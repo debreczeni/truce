@@ -107,6 +107,12 @@ pub struct PluginInfo {
     /// user presets and packs.
     pub preset_user_dir: Option<&'static str>,
 
+    /// Optional native preset file extension (without leading dot),
+    /// populated by `truce::plugin_info!()` from `[presets]` /
+    /// `[plugin.presets]` `extension` in `truce.toml`. `None` resolves
+    /// to [`crate::presets::PRESET_FILE_EXT`] (`"trucepreset"`).
+    pub preset_file_ext: Option<&'static str>,
+
     pub vst3_name: Option<&'static str>,
     pub clap_name: Option<&'static str>,
     pub vst2_name: Option<&'static str>,
@@ -149,6 +155,18 @@ pub struct PluginInfo {
     /// AAX chunk fourccs a pre-truce build stored its state under.
     /// See [`Self::legacy_au_keys`].
     pub legacy_aax_chunk_ids: &'static [&'static str],
+}
+
+impl PluginInfo {
+    /// Resolved native preset container extension (without leading dot),
+    /// defaulting to [`crate::presets::PRESET_FILE_EXT`] (`"trucepreset"`).
+    #[must_use]
+    pub fn resolved_preset_ext(&self) -> &'static str {
+        match self.preset_file_ext {
+            Some(ext) if !ext.is_empty() => ext,
+            _ => crate::presets::PRESET_FILE_EXT,
+        }
+    }
 }
 
 /// Sample-accurate chunking tunables baked into [`PluginInfo`] at

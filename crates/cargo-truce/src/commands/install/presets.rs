@@ -36,7 +36,7 @@ use std::ffi::OsStr;
 use crate::preset_codec::vstpreset_bytes;
 #[cfg(target_os = "macos")]
 use crate::preset_codec::{aupreset_xml, fourcc_int};
-use truce_utils::preset::{PRESET_FILE_EXT, PresetMeta, write_preset_file};
+use truce_utils::preset::{PresetMeta, write_preset_file};
 use truce_utils::{safe_filename, state};
 
 /// One preset ready for per-format emission.
@@ -85,6 +85,7 @@ impl EmittablePreset {
 /// A plugin's parsed factory-preset library.
 pub(crate) struct FactoryPresets {
     presets: Vec<EmittablePreset>,
+    file_ext: String,
 }
 
 /// The plugin's authored-library directory (`presets/` next to the
@@ -100,21 +101,19 @@ pub(crate) fn authored_presets_dir(root: &Path, p: &PluginDef) -> Option<PathBuf
     Some(crate_dir.join(dir))
 }
 
-/// Reject an unusable `[plugin.presets]` `user_dir` loudly at tool
-/// time. The runtime resolver falls back to the default path
-/// silently (it can't error mid-host-scan); the CLI is where the
-/// author hears about the mistake.
-pub(crate) fn validate_user_dir(p: &PluginDef) -> Res {
-    if let Some(raw) = p.presets.as_ref().and_then(|c| c.user_dir.as_deref())
-        && truce_utils::presets::sanitize_preset_user_dir(raw).is_none()
-    {
-        return Err(format!(
-            "[plugin.presets] user_dir \"{raw}\" is not a usable relative path \
-             (needs at least one valid segment; `..` is rejected)"
-        )
-        .into());
-    }
-    Ok(())
+/// Reject unusable `[presets]` / `[plugin.presets]` settings loudly
+/// at tool time and return `(resolved_user_dir, resolved_file_ext)`.
+/// The runtime resolver falls back silently (it can't error mid-host-
+/// scan); the CLI is where the author hears about the mistake.
+pub(crate) fn validate_preset_config(
+    config: &Config,
+    p: &PluginDef,
+) -> Result<(Option<String>, String), crate::CargoTruceError> {
+    let user_dir = truce_build::resolve_preset_user_dir(&config.vendor.name, &config.presets, p)
+        .map_err(crate::CargoTruceError::from)?;
+    let ext = truce_build::resolve_preset_extension(&config.presets, p)
+        .map_err(crate::CargoTruceError::from)?;
+    Ok((user_dir, ext))
 }
 
 /// Load and canonicalise the plugin's factory presets, stamping
@@ -127,7 +126,7 @@ pub(crate) fn load_factory_presets(
     p: &PluginDef,
     config: &Config,
 ) -> Result<Option<FactoryPresets>, crate::CargoTruceError> {
-    validate_user_dir(p)?;
+    let (_user_dir, file_ext) = validate_preset_config(config, p)?;
     let configured_dir = p.presets.as_ref().map(|c| c.factory_dir.clone());
 
     let Some(dir) = authored_presets_dir(root, p) else {
@@ -187,7 +186,7 @@ pub(crate) fn load_factory_presets(
             }
         })
         .collect();
-    Ok(Some(FactoryPresets { presets }))
+    Ok(Some(FactoryPresets { presets, file_ext }))
 }
 
 /// Write a preset tree (relative path → bytes) under `dest_root`,
@@ -266,7 +265,7 @@ pub(crate) fn emit_trucepreset_tree(
         .iter()
         .map(|p| {
             (
-                p.rel_path(PRESET_FILE_EXT),
+                p.rel_path(&fp.file_ext),
                 write_preset_file(&p.meta, &p.blob),
             )
         })

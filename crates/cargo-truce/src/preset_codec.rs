@@ -33,15 +33,31 @@ pub(crate) enum PresetFormat {
 }
 
 impl PresetFormat {
-    pub(crate) fn from_path(path: &Path) -> Option<Self> {
-        match path.extension()?.to_str()? {
-            "trucepreset" => Some(Self::TrucePreset),
-            "vstpreset" => Some(Self::Vst3),
-            "aupreset" => Some(Self::Au),
-            "ttl" => Some(Self::Lv2),
-            "preset" => Some(Self::AuthoredToml),
-            _ => None,
+    /// Detect format by path extension, recognizing both the built-in
+    /// formats (including `.trucepreset`) and an optional custom native
+    /// container extension configured in `truce.toml`.
+    pub(crate) fn from_path_with_ext(path: &Path, custom_ext: Option<&str>) -> Option<Self> {
+        let ext = path.extension()?.to_str()?;
+        if ext.eq_ignore_ascii_case("trucepreset")
+            || custom_ext.is_some_and(|c| ext.eq_ignore_ascii_case(c))
+        {
+            Some(Self::TrucePreset)
+        } else if ext.eq_ignore_ascii_case("vstpreset") {
+            Some(Self::Vst3)
+        } else if ext.eq_ignore_ascii_case("aupreset") {
+            Some(Self::Au)
+        } else if ext.eq_ignore_ascii_case("ttl") {
+            Some(Self::Lv2)
+        } else if ext.eq_ignore_ascii_case("preset") {
+            Some(Self::AuthoredToml)
+        } else {
+            None
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_path(path: &Path) -> Option<Self> {
+        Self::from_path_with_ext(path, None)
     }
 }
 
@@ -418,5 +434,13 @@ mod tests {
         assert_eq!(f("a.ttl"), Some(PresetFormat::Lv2));
         assert_eq!(f("a.preset"), Some(PresetFormat::AuthoredToml));
         assert_eq!(f("a.wav"), None);
+        assert_eq!(
+            PresetFormat::from_path_with_ext(Path::new("a.custompreset"), Some("custompreset")),
+            Some(PresetFormat::TrucePreset)
+        );
+        assert_eq!(
+            PresetFormat::from_path_with_ext(Path::new("a.trucepreset"), Some("custompreset")),
+            Some(PresetFormat::TrucePreset)
+        );
     }
 }

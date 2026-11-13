@@ -1251,6 +1251,7 @@ mod uri_consistency_tests {
             aax_name: None,
             lv2_name: None,
             preset_user_dir: None,
+            preset_file_ext: None,
             mute_preview_output: false,
             automation: truce_core::info::AutomationConfig::DEFAULT,
             legacy_au_keys: &[],

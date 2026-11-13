@@ -249,7 +249,28 @@ pub fn plugin_info(_input: TokenStream) -> TokenStream {
             _ => quote! { None },
         }
     };
-    let preset_user_dir = opt_str(&plugin.presets.as_ref().and_then(|c| c.user_dir.clone()));
+    let resolved_user_dir = match truce_build::resolve_preset_user_dir(
+        &config.vendor.name,
+        &config.presets,
+        plugin,
+    ) {
+        Ok(dir) => dir,
+        Err(msg) => {
+            return syn::Error::new(proc_macro2::Span::call_site(), msg)
+                .to_compile_error()
+                .into();
+        }
+    };
+    let resolved_preset_ext = match truce_build::resolve_preset_extension(&config.presets, plugin) {
+        Ok(ext) => Some(ext).filter(|e| e != truce_utils::preset::PRESET_FILE_EXT),
+        Err(msg) => {
+            return syn::Error::new(proc_macro2::Span::call_site(), msg)
+                .to_compile_error()
+                .into();
+        }
+    };
+    let preset_user_dir = opt_str(&resolved_user_dir);
+    let preset_file_ext = opt_str(&resolved_preset_ext);
     let vst3_name = opt_str(&plugin.vst3_name);
     let clap_name = opt_str(&plugin.clap_name);
     let vst2_name = opt_str(&plugin.vst2_name);
@@ -313,6 +334,7 @@ pub fn plugin_info(_input: TokenStream) -> TokenStream {
                 aax_category: #aax_category,
                 vst3_subcategory: #vst3_subcategory,
                 preset_user_dir: #preset_user_dir,
+                preset_file_ext: #preset_file_ext,
                 vst3_name: #vst3_name,
                 clap_name: #clap_name,
                 vst2_name: #vst2_name,

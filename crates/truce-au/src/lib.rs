@@ -55,7 +55,7 @@ use truce_core::midi::{
     upconvert_to_midi2,
 };
 use truce_core::plugin::PluginRuntime;
-use truce_core::presets::{PresetScope, enumerate_scope, load_preset_file};
+use truce_core::presets::{PresetScope, enumerate_scope_with_ext, load_preset_file};
 use truce_core::rt::{RtSection, audit};
 use truce_core::snapshot::SnapshotSlot;
 use truce_core::state;
@@ -1213,12 +1213,13 @@ fn factory_presets<P: PluginExport>() -> &'static [FactoryPresetEntry] {
             return Vec::new();
         };
         let info = P::info();
-        let mut refs = enumerate_scope(
+        let mut refs = enumerate_scope_with_ext(
             &root,
             PresetScope::Factory,
             info.vendor,
             info.name,
             state::shared_plugin_state_hash(&info),
+            info.resolved_preset_ext(),
         );
         // The library's `default = true` preset leads the list: hosts
         // treat factory preset 0 as the de-facto initial sound. The

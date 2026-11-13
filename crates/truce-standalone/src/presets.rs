@@ -31,7 +31,8 @@ use crate::vlog;
 pub fn store<P: PluginExport>(presets_dir: Option<&std::path::Path>) -> PresetStore {
     let info = P::info();
     let hash = hash_plugin_id(info.clap_id);
-    let mut store = PresetStore::new(info.vendor, info.name, hash, info.preset_user_dir);
+    let mut store = PresetStore::new(info.vendor, info.name, hash, info.preset_user_dir)
+        .with_file_ext(info.resolved_preset_ext());
     if let Some(root) = presets_dir
         .map(PathBuf::from)
         .filter(|p| p.is_dir())
@@ -235,6 +236,8 @@ struct PresetControllerInner {
     save_meta: SaveMetaFn,
     /// Prompt for a destination and write a new user preset.
     save_as: SaveAsFn,
+    /// Resolved native preset container extension (without leading dot).
+    preset_ext: &'static str,
 }
 
 impl PresetController {
@@ -279,9 +282,13 @@ impl PresetController {
         });
 
         let info = P::info();
+        let preset_ext = info.resolved_preset_ext();
+        let preset_vendor = info.vendor;
         let hash = hash_plugin_id(info.clap_id);
         let user_root = user_preset_root(info.vendor, info.name, info.preset_user_dir);
-        let save_as = Box::new(move || save_as_dialog::<P>(&plugin, hash, user_root.as_deref()));
+        let save_as = Box::new(move || {
+            save_as_dialog::<P>(&plugin, hash, user_root.as_deref(), preset_vendor, preset_ext)
+        });
 
         Self {
             inner: std::rc::Rc::new(PresetControllerInner {
@@ -290,12 +297,13 @@ impl PresetController {
                 load,
                 save_meta,
                 save_as,
+                preset_ext,
             }),
         }
     }
 
     /// The full "Save Preset" menu-item title: overwriting the loaded
-    /// user preset shows its file (`Save Preset (Glass.trucepreset)`);
+    /// user preset shows its file (`Save Preset (Glass.<ext>)`);
     /// otherwise Save has nothing to overwrite (it's disabled - see
     /// [`save_enabled`]) so the title is the plain `Save Preset`. The
     /// menus refresh this each time the Presets menu opens.
@@ -307,7 +315,7 @@ impl PresetController {
             Some(name) => format!(
                 "Save Preset ({}.{})",
                 safe_filename(&name),
-                truce_utils::preset::PRESET_FILE_EXT
+                self.inner.preset_ext
             ),
             None => "Save Preset".to_string(),
         }
@@ -484,12 +492,19 @@ fn save_as_dialog<P: PluginExport>(
     plugin: &Arc<Mutex<P>>,
     hash: u64,
     user_root: Option<&std::path::Path>,
+    vendor: &str,
+    preset_ext: &str,
 ) -> Option<String> {
     let blob = snapshot(plugin, hash)?;
+    let filter_name = if preset_ext == truce_utils::preset::PRESET_FILE_EXT {
+        "truce preset".to_string()
+    } else {
+        format!("{vendor} preset")
+    };
     let mut dialog = rfd::FileDialog::new()
         .set_title(format!("Save preset for {}", P::info().name))
-        .add_filter("truce preset", &[truce_utils::preset::PRESET_FILE_EXT])
-        .set_file_name(format!("Preset.{}", truce_utils::preset::PRESET_FILE_EXT));
+        .add_filter(&filter_name, &[preset_ext])
+        .set_file_name(format!("Preset.{preset_ext}"));
     if let Some(dir) = user_root {
         let _ = std::fs::create_dir_all(dir);
         dialog = dialog.set_directory(dir);
@@ -510,6 +525,8 @@ fn save_as_dialog<P: PluginExport>(
     plugin: &Arc<Mutex<P>>,
     hash: u64,
     user_root: Option<&std::path::Path>,
+    _vendor: &str,
+    preset_ext: &str,
 ) -> Option<String> {
     let blob = snapshot(plugin, hash)?;
     let Some(dir) = user_root else {
@@ -523,10 +540,7 @@ fn save_as_dialog<P: PluginExport>(
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    let path = dir.join(format!(
-        "Untitled {ts}.{}",
-        truce_utils::preset::PRESET_FILE_EXT
-    ));
+    let path = dir.join(format!("Untitled {ts}.{preset_ext}"));
     let name = write_preset_at(&path, &blob)?;
     saved_user_uri::<P>(&name)
 }
@@ -561,6 +575,7 @@ mod tests {
                 }),
                 save_meta: Box::new(|_| None),
                 save_as: Box::new(|| None),
+                preset_ext: truce_utils::preset::PRESET_FILE_EXT,
             }),
         }
     }

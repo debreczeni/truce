@@ -143,7 +143,7 @@ OPTIONS:
                             or a channel `1`-`16`.
   --bpm <n>                 Transport BPM (default 120)
   --state <path>            Load plugin state or a preset from a file
-                            on launch (.trucepreset or a saved state blob)
+                            on launch (.{preset_ext} or a saved state blob)
   --preset <uri|name>       Load a library preset on launch
   --list-presets            List the plugin's presets and exit
   -v, --verbose             Print status chatter (device picks, toggles,
@@ -187,34 +187,47 @@ PRECEDENCE (first match wins):
   of `truce_standalone::run::<Plugin>()`.
 ";
 
-fn print_help() {
-    print!("{HELP_HEAD}");
+fn print_help(preset_ext: &str) {
+    print!(
+        "{}",
+        HELP_HEAD.replace("{preset_ext}", preset_ext)
+    );
     #[cfg(feature = "playback")]
     print!("{HELP_PLAYBACK}");
     print!("{HELP_TAIL}");
 }
 
-/// Parse argv + env and return resolved options. Plugin-author
-/// defaults are not handled here - [`crate::run_with`] applies them
-/// after parsing. When `--help` / `-h` is present, prints help and
-/// returns options with `help = true` so the caller exits cleanly
-/// at the binary boundary (no `process::exit` from library code,
-/// which would short-circuit any test that drives this entry point).
-/// Returns `Err` on parse failure.
+/// Parse argv + env and return resolved options using the default
+/// `.trucepreset` extension in `--help`. See [`parse_for_ext`].
+///
+/// # Errors
+///
+/// See [`parse_for_ext`].
+pub fn parse() -> Result<Options, String> {
+    parse_for_ext(truce_utils::preset::PRESET_FILE_EXT)
+}
+
+/// Parse argv + env and return resolved options, displaying `preset_ext`
+/// in `--help`'s `--state` description. Plugin-author defaults are not
+/// handled here - [`crate::run_with`] applies them after parsing. When
+/// `--help` / `-h` is present, prints help and returns options with
+/// `help = true` so the caller exits cleanly at the binary boundary (no
+/// `process::exit` from library code, which would short-circuit any test
+/// that drives this entry point). Returns `Err` on parse failure.
 ///
 /// # Errors
 ///
 /// Returns `Err(String)` if a value-bearing flag is missing its
 /// argument, fails the type-coercion (`f64`, `usize`, etc.), or an
 /// unrecognized positional / leftover token slips through.
-pub fn parse() -> Result<Options, String> {
+pub fn parse_for_ext(preset_ext: &str) -> Result<Options, String> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     let mut args = pico_args::Arguments::from_vec(args);
 
     // Presence flags first (affect the rest of parsing).
     let help = args.contains(["-h", "--help"]);
     if help {
-        print_help();
+        print_help(preset_ext);
         return Ok(Options {
             help: true,
             ..Options::default()

@@ -27,6 +27,58 @@
 /// File extension for truce-native preset files, without the dot.
 pub const PRESET_FILE_EXT: &str = "trucepreset";
 
+/// Preset extensions claimed by other formats or pack archives; reusing
+/// one for the native container would make path-based tools ambiguous.
+const RESERVED_PRESET_EXTS: &[&str] = &["preset", "vstpreset", "aupreset", "ttl", "zip"];
+
+/// Validate and normalise a configured native preset file extension.
+///
+/// Strips whitespace and leading `.` characters, ensures non-empty
+/// ASCII identifier characters (`A-Z`, `a-z`, `0-9`, `_`, `-`, starting
+/// with alphanumeric, max 64 bytes), and rejects extensions reserved
+/// for other preset formats (`.preset`, `.vstpreset`, `.aupreset`,
+/// `.ttl`, `.zip`).
+///
+/// # Errors
+///
+/// Returns a human-readable explanation when `raw` is empty, contains
+/// disallowed characters, exceeds 64 bytes, or collides with a reserved
+/// preset/archive extension.
+pub fn validate_preset_ext(raw: &str) -> Result<String, String> {
+    let ext = raw.trim().trim_start_matches('.');
+    if ext.is_empty() {
+        return Err("preset extension must not be empty".to_string());
+    }
+    if ext.len() > 64 {
+        return Err(format!("preset extension \"{raw}\" is too long (max 64 chars)"));
+    }
+    let mut bytes = ext.bytes();
+    if !bytes.next().is_some_and(|b| b.is_ascii_alphanumeric())
+        || !bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        return Err(format!(
+            "preset extension \"{raw}\" may only contain ASCII letters, digits, `-`, or `_`"
+        ));
+    }
+    if RESERVED_PRESET_EXTS
+        .iter()
+        .any(|reserved| ext.eq_ignore_ascii_case(reserved))
+    {
+        return Err(format!(
+            "preset extension \".{ext}\" is reserved by another preset/archive format"
+        ));
+    }
+    Ok(ext.to_string())
+}
+
+/// Normalise a custom preset file extension, returning `None` when the
+/// input is unusable (empty, contains dots/separators/spaces, or
+/// collides with another format extension).
+#[must_use]
+pub fn sanitize_preset_ext(raw: &str) -> Option<String> {
+    validate_preset_ext(raw).ok()
+}
+
 const PRESET_MAGIC: &[u8; 4] = b"TRPS";
 const PRESET_FORMAT_VERSION: u32 = 1;
 
@@ -214,5 +266,23 @@ mod tests {
         assert!(parse_preset_file(&file).is_none());
         file[0] = b'X';
         assert!(parse_preset_meta(&file).is_none());
+    }
+
+    #[test]
+    fn validate_and_sanitize_preset_ext() {
+        assert_eq!(sanitize_preset_ext("custompreset").as_deref(), Some("custompreset"));
+        assert_eq!(sanitize_preset_ext(" .custompreset ").as_deref(), Some("custompreset"));
+        assert_eq!(sanitize_preset_ext("my-ext_1").as_deref(), Some("my-ext_1"));
+
+        assert!(validate_preset_ext("").is_err());
+        assert!(validate_preset_ext(".").is_err());
+        assert!(validate_preset_ext("a.b").is_err());
+        assert!(validate_preset_ext("bad/ext").is_err());
+        assert!(validate_preset_ext("-bad").is_err());
+        assert!(validate_preset_ext("preset").is_err());
+        assert!(validate_preset_ext("VSTPRESET").is_err());
+        assert!(validate_preset_ext("aupreset").is_err());
+        assert!(validate_preset_ext("ttl").is_err());
+        assert!(validate_preset_ext("zip").is_err());
     }
 }

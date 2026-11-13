@@ -216,6 +216,28 @@ pub struct Config {
     /// chunking layer. Absent -> `AutomationConfig::default()`.
     #[serde(default)]
     pub automation: AutomationConfig,
+    /// Optional `[presets]` table - workspace-wide defaults for preset
+    /// container extension and author-folder branding.
+    #[serde(default)]
+    pub presets: GlobalPresetsConfig,
+}
+
+/// Top-level `[presets]` - workspace-wide preset branding & format
+/// defaults inherited by all `[[plugin]]` entries.
+#[derive(Deserialize, Debug, Default, Clone)]
+#[serde(default)]
+pub struct GlobalPresetsConfig {
+    /// Default native preset file extension (without leading dot,
+    /// e.g. `"myplugpreset"`). Overridden per-plugin by
+    /// `[plugin.presets].extension`. Defaults to `"trucepreset"`.
+    pub extension: Option<String>,
+    /// Author/vendor folder subpath replacing the default
+    /// `truce/<vendor>` prefix of the user-scope preset root (e.g.
+    /// `"acme"`). Combines with `[plugin.presets].plugin_dir` (or
+    /// `<plugin>` when absent) to form `<vendor_dir>/<plugin>` with
+    /// no `truce/` namespace directory. Overridden per-plugin by
+    /// `[plugin.presets].vendor_dir` or `[plugin.presets].user_dir`.
+    pub vendor_dir: Option<String>,
 }
 
 /// Sample-accurate automation chunking tunables.
@@ -405,27 +427,147 @@ pub struct LegacyStateConfig {
     pub aax_chunk_ids: Vec<String>,
 }
 
-/// `[plugin.presets]` - factory-preset emission settings.
-#[derive(Deserialize, Debug)]
+/// `[plugin.presets]` - factory-preset emission and per-plugin branding.
+#[derive(Deserialize, Debug, Default)]
 pub struct PresetsConfig {
     /// Directory of authored `.preset` TOML files, relative to the
     /// plugin's crate directory. Defaults to `presets`.
     #[serde(default = "default_presets_dir")]
     pub factory_dir: String,
-    /// Optional override for the `truce/<vendor>/<plugin>` subpath
+    /// Optional full override for the `truce/<vendor>/<plugin>` subpath
     /// of the user-scope preset root (e.g. `"Acme/MySynth"`).
     /// Relative segments only; `..` is rejected. Resolves to
     /// `~/Library/Audio/Presets/<user_dir>/` on macOS,
-    /// `%APPDATA%\<user_dir>\` on Windows, and
-    /// `$XDG_DATA_HOME/truce/<user_dir>/` on Linux. Pick once,
-    /// before first release: changing it later orphans saved user
-    /// presets.
+    /// `%APPDATA%\<user_dir>\` on Windows,
+    /// `$XDG_DATA_HOME/<user_dir>/` on Linux, and
+    /// `<container>/Library/Application Support/<user_dir>/` on iOS.
+    /// Pick once, before first release: changing it later orphans
+    /// saved user presets.
     #[serde(default)]
     pub user_dir: Option<String>,
+    /// Per-plugin override for `[presets].vendor_dir` (replaces
+    /// `truce/<vendor>` with a custom author folder segment).
+    #[serde(default)]
+    pub vendor_dir: Option<String>,
+    /// Custom folder name for this plugin under the author preset
+    /// folder (e.g. `"mysynth"` -> `<vendor_dir>/mysynth`). Defaults
+    /// to sanitized plugin display name when `vendor_dir` is set.
+    #[serde(default)]
+    pub plugin_dir: Option<String>,
+    /// Per-plugin override for `[presets].extension` (native preset
+    /// file extension, without leading dot).
+    #[serde(default)]
+    pub extension: Option<String>,
 }
 
 fn default_presets_dir() -> String {
     "presets".to_string()
+}
+
+/// Resolve and validate the native preset file extension (without dot)
+/// for `plugin`, inheriting `[presets].extension` when `[plugin.presets]`
+/// omits `extension`, or defaulting to `"trucepreset"`.
+///
+/// # Errors
+///
+/// Returns an error if either configured extension is empty, contains
+/// disallowed characters, or collides with a reserved format extension.
+pub fn resolve_preset_extension(
+    global: &GlobalPresetsConfig,
+    plugin: &PluginDef,
+) -> Result<String, String> {
+    let global_ext = global
+        .extension
+        .as_deref()
+        .map(|raw| {
+            truce_utils::preset::validate_preset_ext(raw)
+                .map_err(|e| format!("[presets] extension: {e}"))
+        })
+        .transpose()?;
+    let plugin_ext = plugin
+        .presets
+        .as_ref()
+        .and_then(|c| c.extension.as_deref())
+        .map(|raw| {
+            truce_utils::preset::validate_preset_ext(raw)
+                .map_err(|e| format!("[plugin.presets] extension: {e}"))
+        })
+        .transpose()?;
+    Ok(plugin_ext
+        .or(global_ext)
+        .unwrap_or_else(|| truce_utils::preset::PRESET_FILE_EXT.to_string()))
+}
+
+fn sanitize_relative_dir(field: &str, raw: &str) -> Result<String, String> {
+    let Some(path) = truce_utils::presets::sanitize_preset_user_dir(raw) else {
+        return Err(format!(
+            "{field} \"{raw}\" is not a usable relative path \
+             (needs at least one valid segment; `..` is rejected)"
+        ));
+    };
+    let parts: Vec<String> = path
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect();
+    if parts.is_empty() {
+        return Err(format!("{field} \"{raw}\" resolved to an empty path"));
+    }
+    Ok(parts.join("/"))
+}
+
+/// Resolve and validate the user-scope preset subpath override for
+/// `plugin` from `[plugin.presets].user_dir` or the combination of
+/// `[presets].vendor_dir` and `[plugin.presets].plugin_dir`. Returns
+/// `Ok(None)` when neither branding override is configured (using the
+/// `truce/<vendor>/<plugin>` default).
+///
+/// # Errors
+///
+/// Returns an error if any configured `user_dir`, `vendor_dir`, or
+/// `plugin_dir` is empty or contains invalid path segments such as `..`.
+pub fn resolve_preset_user_dir(
+    vendor_name: &str,
+    global: &GlobalPresetsConfig,
+    plugin: &PluginDef,
+) -> Result<Option<String>, String> {
+    let global_vendor = global
+        .vendor_dir
+        .as_deref()
+        .map(|raw| sanitize_relative_dir("[presets] vendor_dir", raw))
+        .transpose()?;
+    let presets = plugin.presets.as_ref();
+    let plugin_vendor = presets
+        .and_then(|c| c.vendor_dir.as_deref())
+        .map(|raw| sanitize_relative_dir("[plugin.presets] vendor_dir", raw))
+        .transpose()?;
+    let plugin_dir = presets
+        .and_then(|c| c.plugin_dir.as_deref())
+        .map(|raw| sanitize_relative_dir("[plugin.presets] plugin_dir", raw))
+        .transpose()?;
+    let user_dir = presets
+        .and_then(|c| c.user_dir.as_deref())
+        .map(|raw| sanitize_relative_dir("[plugin.presets] user_dir", raw))
+        .transpose()?;
+
+    if let Some(explicit) = user_dir {
+        return Ok(Some(explicit));
+    }
+    let vendor_dir = plugin_vendor.or(global_vendor);
+    match (vendor_dir, plugin_dir) {
+        (Some(v), Some(p)) => Ok(Some(format!("{v}/{p}"))),
+        (Some(v), None) => Ok(Some(format!(
+            "{v}/{}",
+            truce_utils::safe_filename(&plugin.name)
+        ))),
+        (None, Some(p)) => Ok(Some(format!(
+            "truce/{}/{p}",
+            truce_utils::safe_filename(vendor_name)
+        ))),
+        (None, None) => Ok(None),
+    }
 }
 
 /// Resolve cargo's effective target directory for a given workspace root.
@@ -589,7 +731,10 @@ pub fn load_config(path: &Path) -> Result<Config, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MidiWiring, extract_json_string, midi_wiring, midi2_dialects, validate_bundle_id};
+    use super::{
+        Config, MidiWiring, extract_json_string, midi_wiring, midi2_dialects,
+        resolve_preset_extension, resolve_preset_user_dir, validate_bundle_id,
+    };
 
     fn wiring(w: MidiWiring) -> (bool, bool, u8, u8) {
         (
@@ -727,5 +872,96 @@ mod tests {
             extract_json_string(r#"{"version":1}"#, "target_directory"),
             None
         );
+    }
+
+    #[test]
+    fn preset_extension_and_folder_resolution() {
+        let toml = r#"
+[vendor]
+name = "Acme Studio"
+id = "com.acme"
+au_manufacturer = "Acme"
+
+[presets]
+extension = ".custompreset"
+vendor_dir = "acme"
+
+[[plugin]]
+name = "My Synth"
+bundle_id = "my-synth"
+crate = "my-synth"
+category = "instrument"
+fourcc = "MySy"
+
+[plugin.presets]
+plugin_dir = "mysynth"
+
+[[plugin]]
+name = "Other"
+bundle_id = "other"
+crate = "other"
+category = "effect"
+fourcc = "Othr"
+
+[plugin.presets]
+extension = "otherpreset"
+user_dir = "custom/other"
+"#;
+        let cfg: Config = toml::from_str(toml).unwrap();
+        assert_eq!(
+            resolve_preset_extension(&cfg.presets, &cfg.plugin[0]).unwrap(),
+            "custompreset"
+        );
+        assert_eq!(
+            resolve_preset_user_dir(&cfg.vendor.name, &cfg.presets, &cfg.plugin[0])
+                .unwrap()
+                .as_deref(),
+            Some("acme/mysynth")
+        );
+        assert_eq!(
+            resolve_preset_extension(&cfg.presets, &cfg.plugin[1]).unwrap(),
+            "otherpreset"
+        );
+        assert_eq!(
+            resolve_preset_user_dir(&cfg.vendor.name, &cfg.presets, &cfg.plugin[1])
+                .unwrap()
+                .as_deref(),
+            Some("custom/other")
+        );
+    }
+
+    #[test]
+    fn preset_resolution_rejects_invalid_values() {
+        let bad_ext = r#"
+[vendor]
+name = "Acme"
+id = "com.acme"
+au_manufacturer = "Acme"
+[presets]
+extension = "vstpreset"
+[[plugin]]
+name = "P"
+bundle_id = "p"
+crate = "p"
+category = "effect"
+"#;
+        let cfg: Config = toml::from_str(bad_ext).unwrap();
+        assert!(resolve_preset_extension(&cfg.presets, &cfg.plugin[0]).is_err());
+
+        let bad_dir = r#"
+[vendor]
+name = "Acme"
+id = "com.acme"
+au_manufacturer = "Acme"
+[presets]
+vendor_dir = "../escape"
+[[plugin]]
+name = "P"
+bundle_id = "p"
+crate = "p"
+category = "effect"
+"#;
+        let cfg: Config = toml::from_str(bad_dir).unwrap();
+        assert!(resolve_preset_user_dir(&cfg.vendor.name, &cfg.presets, &cfg.plugin[0]).is_err());
     }
 }

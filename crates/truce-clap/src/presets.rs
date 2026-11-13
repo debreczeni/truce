@@ -204,16 +204,41 @@ unsafe extern "C" fn provider_init<P: PluginExport>(
             return false;
         };
 
+        let info = P::info();
+        let primary_ext = info.resolved_preset_ext();
         if let Some(declare_filetype) = indexer.declare_filetype {
-            let name = c"truce preset";
-            let description = c"truce plugin preset (.trucepreset)";
-            let extension = CString::new(truce_core::presets::PRESET_FILE_EXT).unwrap_or_default();
-            let filetype = clap_preset_discovery_filetype {
-                name: name.as_ptr(),
-                description: description.as_ptr(),
-                file_extension: extension.as_ptr(),
+            let declare_one = |name: &str, desc: &str, ext: &str| -> bool {
+                let name = CString::new(name).unwrap_or_default();
+                let description = CString::new(desc).unwrap_or_default();
+                let extension = CString::new(ext).unwrap_or_default();
+                let filetype = clap_preset_discovery_filetype {
+                    name: name.as_ptr(),
+                    description: description.as_ptr(),
+                    file_extension: extension.as_ptr(),
+                };
+                unsafe { declare_filetype(handle.indexer, &raw const filetype) }
             };
-            if !unsafe { declare_filetype(handle.indexer, &raw const filetype) } {
+            let (name, desc) = if primary_ext == truce_core::presets::PRESET_FILE_EXT {
+                (
+                    "truce preset".to_string(),
+                    format!("truce plugin preset (.{primary_ext})"),
+                )
+            } else {
+                (
+                    format!("{} preset", info.vendor),
+                    format!("{} plugin preset (.{primary_ext})", info.vendor),
+                )
+            };
+            if !declare_one(&name, &desc, primary_ext) {
+                return false;
+            }
+            if primary_ext != truce_core::presets::PRESET_FILE_EXT
+                && !declare_one(
+                    "Legacy preset",
+                    "Legacy truce plugin preset (.trucepreset)",
+                    truce_core::presets::PRESET_FILE_EXT,
+                )
+            {
                 return false;
             }
         }
@@ -244,7 +269,6 @@ unsafe extern "C" fn provider_init<P: PluginExport>(
                 CLAP_PRESET_DISCOVERY_IS_FACTORY_CONTENT,
             );
         }
-        let info = P::info();
         if let Some(root) = user_preset_root(info.vendor, info.name, info.preset_user_dir)
             && root.is_dir()
         {
@@ -334,9 +358,14 @@ unsafe extern "C" fn provider_get_metadata<P: PluginExport>(
                 PresetScope::User
             };
             let hash = shared_plugin_state_hash(&info);
-            for preset in
-                truce_core::presets::enumerate_scope(path, scope, info.vendor, info.name, hash)
-            {
+            for preset in truce_core::presets::enumerate_scope_with_ext(
+                path,
+                scope,
+                info.vendor,
+                info.name,
+                hash,
+                info.resolved_preset_ext(),
+            ) {
                 if !report_preset::<P>(receiver, metadata_receiver, &preset) {
                     return false;
                 }

@@ -179,7 +179,7 @@ where
     // any later prints would still vanish.
     attach_parent_console();
 
-    let mut opts = match cli::parse() {
+    let mut opts = match cli::parse_for_ext(P::info().resolved_preset_ext()) {
         Ok(o) => o,
         Err(e) => {
             eprintln!("Error: {e}");

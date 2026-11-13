@@ -76,7 +76,8 @@ USAGE:
   cargo truce preset export  <out.zip> [-p <crate>]
   cargo truce preset pull    [--category <c>] [--new] [--watch] [-p <crate>]
 
-FORMATS (by extension): .preset (authored TOML), .trucepreset,
+FORMATS (by extension): .preset (authored TOML), .trucepreset (or
+  the extension configured in [presets]/[plugin.presets]),
   .vstpreset, .aupreset, .ttl (LV2)
 
 `pull` scans the OS preset locations hosts save into (Library/Audio/
@@ -101,6 +102,8 @@ struct PluginCtx<'a> {
     config: &'a Config,
     root: PathBuf,
     plugin_id_hash: u64,
+    preset_user_dir: Option<String>,
+    preset_ext: String,
 }
 
 impl PluginCtx<'_> {
@@ -136,8 +139,9 @@ impl PluginCtx<'_> {
             &self.config.vendor.name,
             &self.p.name,
             self.plugin_id_hash,
-            self.p.presets.as_ref().and_then(|c| c.user_dir.as_deref()),
+            self.preset_user_dir.as_deref(),
         )
+        .with_file_ext(&self.preset_ext)
     }
 
     fn library(&self) -> Result<Vec<AuthoredPreset>, crate::CargoTruceError> {
@@ -189,13 +193,16 @@ fn ctx<'a>(
     filter: Option<&str>,
 ) -> Result<PluginCtx<'a>, crate::CargoTruceError> {
     let p = single_plugin(config, filter)?;
-    crate::commands::install::presets::validate_user_dir(p)?;
+    let (preset_user_dir, preset_ext) =
+        crate::commands::install::presets::validate_preset_config(config, p)?;
     let clap_id = truce_build::plugin_id(&config.vendor.id, &p.bundle_id);
     Ok(PluginCtx {
         p,
         config,
         root: project_root(),
         plugin_id_hash: hash_plugin_id(&clap_id),
+        preset_user_dir,
+        preset_ext,
     })
 }
 
@@ -307,7 +314,7 @@ fn cmd_convert(args: &[String]) -> Res {
 /// Decode any supported input into `(meta, params, extra)`, with the
 /// envelope validated against the plugin's identity hash.
 fn read_native(ctx: &PluginCtx<'_>, path: &Path) -> Result<PresetParts, crate::CargoTruceError> {
-    let format = PresetFormat::from_path(path)
+    let format = PresetFormat::from_path_with_ext(path, Some(&ctx.preset_ext))
         .ok_or_else(|| format!("unsupported preset extension: {}", path.display()))?;
 
     if format == PresetFormat::AuthoredToml {
@@ -357,7 +364,7 @@ fn encode_native(
     params: &[(u32, f64)],
     extra: &[u8],
 ) -> Result<Vec<u8>, crate::CargoTruceError> {
-    let format = PresetFormat::from_path(output)
+    let format = PresetFormat::from_path_with_ext(output, Some(&ctx.preset_ext))
         .ok_or_else(|| format!("unsupported preset extension: {}", output.display()))?;
     let ids: Vec<u32> = params.iter().map(|(id, _)| *id).collect();
     let values: Vec<f64> = params.iter().map(|(_, v)| *v).collect();
@@ -583,15 +590,21 @@ fn import_pack(ctx: &PluginCtx<'_>, file: &Path) -> Res {
         if entry.is_dir() {
             continue;
         }
-        if rel.extension().and_then(|e| e.to_str()) != Some("trucepreset") {
+        let Some(ext) = rel.extension().and_then(|e| e.to_str()) else {
+            skipped += 1;
+            continue;
+        };
+        if !ext.eq_ignore_ascii_case(&ctx.preset_ext)
+            && !ext.eq_ignore_ascii_case(truce_utils::preset::PRESET_FILE_EXT)
+        {
             skipped += 1;
             continue;
         }
-        // Strip the conventional `trucepreset/` top-level tree name.
-        let rel: PathBuf = match rel.strip_prefix("trucepreset") {
-            Ok(stripped) => stripped.to_path_buf(),
-            Err(_) => rel.clone(),
-        };
+        // Strip the conventional `<ext>/` or `trucepreset/` top-level tree name.
+        let rel: PathBuf = rel
+            .strip_prefix(&ctx.preset_ext)
+            .or_else(|_| rel.strip_prefix(truce_utils::preset::PRESET_FILE_EXT))
+            .map_or_else(|_| rel.clone(), Path::to_path_buf);
         let out = dest.join(rel);
         if let Some(parent) = out.parent() {
             fs_ctx::create_dir_all(parent)?;
@@ -602,8 +615,9 @@ fn import_pack(ctx: &PluginCtx<'_>, file: &Path) -> Res {
         installed += 1;
     }
     eprintln!(
-        "pack \"{pack_name}\": {installed} preset(s) -> {} ({skipped} non-trucepreset entries left in the zip)",
-        dest.display()
+        "pack \"{pack_name}\": {installed} preset(s) -> {} ({skipped} non-{} entries left in the zip)",
+        dest.display(),
+        ctx.preset_ext
     );
     Ok(())
 }
@@ -643,11 +657,9 @@ fn cmd_export(args: &[String]) -> Res {
         };
         let display = safe_filename(&preset.meta.name);
 
-        zip.start_file(
-            format!("trucepreset/{dir}{}.trucepreset", preset.stem),
-            options,
-        )
-        .map_err(zip_err)?;
+        let ext = &ctx.preset_ext;
+        zip.start_file(format!("{ext}/{dir}{}.{ext}", preset.stem), options)
+            .map_err(zip_err)?;
         zip.write_all(&truce_utils::preset::write_preset_file(&preset.meta, &blob))?;
 
         zip.start_file(format!("vstpreset/{dir}{display}.vstpreset"), options)
@@ -752,7 +764,7 @@ fn pull_once(
 ) -> Result<u32, crate::CargoTruceError> {
     let mut imported = 0u32;
     for path in host_preset_files(ctx) {
-        let Some(format) = PresetFormat::from_path(&path) else {
+        let Some(format) = PresetFormat::from_path_with_ext(&path, Some(&ctx.preset_ext)) else {
             continue;
         };
         let Ok(bytes) = std::fs::read(&path) else {
@@ -814,12 +826,13 @@ fn host_preset_files(ctx: &PluginCtx<'_>) -> Vec<PathBuf> {
             collect_files(
                 &home.join("Library/Audio/Presets").join(&vendor).join(name),
                 3,
+                &ctx.preset_ext,
                 &mut files,
             );
         }
         // Host-saved LV2 user presets (lilv writes one bundle per
         // preset); plugin-agnostic dir, the hash check filters.
-        collect_files(&home.join(".lv2"), 2, &mut files);
+        collect_files(&home.join(".lv2"), 2, &ctx.preset_ext, &mut files);
     }
     #[cfg(target_os = "windows")]
     if let Some(profile) = std::env::var_os("USERPROFILE") {
@@ -831,6 +844,7 @@ fn host_preset_files(ctx: &PluginCtx<'_>) -> Vec<PathBuf> {
                     .join(&vendor)
                     .join(name),
                 3,
+                &ctx.preset_ext,
                 &mut files,
             );
         }
@@ -842,16 +856,17 @@ fn host_preset_files(ctx: &PluginCtx<'_>) -> Vec<PathBuf> {
             collect_files(
                 &home.join(".vst3/presets").join(&vendor).join(name),
                 3,
+                &ctx.preset_ext,
                 &mut files,
             );
         }
-        collect_files(&home.join(".lv2"), 2, &mut files);
+        collect_files(&home.join(".lv2"), 2, &ctx.preset_ext, &mut files);
     }
 
-    // The truce user root: presets saved through the CRUD API /
-    // future in-editor menus.
+    // The user preset root: presets saved through the CRUD API /
+    // standalone / in-editor menus.
     if let Some(user_root) = ctx.store().user_root() {
-        collect_files(user_root, 3, &mut files);
+        collect_files(user_root, 3, &ctx.preset_ext, &mut files);
     }
 
     files.sort();
@@ -859,7 +874,7 @@ fn host_preset_files(ctx: &PluginCtx<'_>) -> Vec<PathBuf> {
     files
 }
 
-fn collect_files(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+fn collect_files(dir: &Path, depth: usize, custom_ext: &str, out: &mut Vec<PathBuf>) {
     if depth == 0 {
         return;
     }
@@ -869,8 +884,10 @@ fn collect_files(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
     for entry in entries.filter_map(Result::ok) {
         let path = entry.path();
         if path.is_dir() {
-            collect_files(&path, depth - 1, out);
-        } else if PresetFormat::from_path(&path).is_some_and(|f| f != PresetFormat::AuthoredToml) {
+            collect_files(&path, depth - 1, custom_ext, out);
+        } else if PresetFormat::from_path_with_ext(&path, Some(custom_ext))
+            .is_some_and(|f| f != PresetFormat::AuthoredToml)
+        {
             out.push(path);
         }
     }

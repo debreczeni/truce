@@ -23,7 +23,9 @@ use crate::state::{
     DeserializedState, StateParse, deserialize_state, parse_state, serialize_state,
 };
 
-pub use crate::preset::{PRESET_FILE_EXT, parse_preset_file};
+pub use crate::preset::{
+    PRESET_FILE_EXT, parse_preset_file, sanitize_preset_ext, validate_preset_ext,
+};
 
 /// Where a preset lives. `Factory` presets sit inside the plugin
 /// bundle, written at install time; `User` presets live in the
@@ -78,15 +80,12 @@ pub struct PresetRef {
 /// |---|---|---|
 /// | macOS | `~/Library/Audio/Presets/truce/<vendor>/<plugin>/` | `~/Library/Audio/Presets/Acme/MySynth/` |
 /// | Windows | `%APPDATA%\truce\<vendor>\<plugin>\presets\` | `%APPDATA%\Acme\MySynth\` |
-/// | Linux | `$XDG_DATA_HOME/truce/<vendor>/<plugin>/presets/` | `$XDG_DATA_HOME/truce/Acme/MySynth/` |
+/// | Linux | `$XDG_DATA_HOME/truce/<vendor>/<plugin>/presets/` | `$XDG_DATA_HOME/Acme/MySynth/` |
 /// | iOS | `<container>/Library/Application Support/truce/<vendor>/<plugin>/presets/` | `<container>/Library/Application Support/Acme/MySynth/` |
 ///
 /// (`$XDG_DATA_HOME` falls back to `~/.local/share` when unset.)
-/// The override replaces the whole default subpath and no `presets`
-/// suffix is appended - except on Linux, where it stays under the
-/// `truce/` namespace: `$XDG_DATA_HOME` is a flat root shared by
-/// every app, unlike macOS's preset-specific directory or the
-/// per-vendor `%APPDATA%` convention.
+/// The override replaces the whole default subpath (removing the
+/// `truce/` prefix) and no `presets` suffix is appended.
 ///
 /// Returns `None` when the relevant home / app-data environment
 /// variable is missing (sandboxed or otherwise degenerate hosts);
@@ -139,9 +138,6 @@ pub fn user_preset_root(
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))?;
         let mut root = data_home;
-        if has_override {
-            root.push("truce");
-        }
         root.push(subpath);
         if !has_override {
             root.push("presets");
@@ -285,11 +281,35 @@ pub fn enumerate_scope(
     plugin_name: &str,
     plugin_id_hash: u64,
 ) -> Vec<PresetRef> {
+    enumerate_scope_with_ext(
+        root,
+        scope,
+        vendor,
+        plugin_name,
+        plugin_id_hash,
+        PRESET_FILE_EXT,
+    )
+}
+
+/// Recursively walk one scope root for preset files matching `file_ext`
+/// (or legacy `.trucepreset` containers) and parse each file's metadata
+/// block.
+#[must_use]
+pub fn enumerate_scope_with_ext(
+    root: &Path,
+    scope: PresetScope,
+    vendor: &str,
+    plugin_name: &str,
+    plugin_id_hash: u64,
+    file_ext: &str,
+) -> Vec<PresetRef> {
+    let resolved_ext = sanitize_preset_ext(file_ext);
     let ctx = WalkScope {
         scope,
         vendor,
         plugin_name,
         plugin_id_hash,
+        file_ext: resolved_ext.as_deref().unwrap_or(PRESET_FILE_EXT),
     };
     let mut out = Vec::new();
     walk(root, root, &ctx, &mut out, 0);
@@ -302,6 +322,14 @@ struct WalkScope<'a> {
     vendor: &'a str,
     plugin_name: &'a str,
     plugin_id_hash: u64,
+    file_ext: &'a str,
+}
+
+fn matches_preset_ext(path: &Path, custom_ext: &str) -> bool {
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return false;
+    };
+    ext.eq_ignore_ascii_case(custom_ext) || ext.eq_ignore_ascii_case(PRESET_FILE_EXT)
 }
 
 /// Directory-recursion ceiling for the preset walk. Preset libraries
@@ -324,7 +352,7 @@ fn walk(root: &Path, dir: &Path, ctx: &WalkScope<'_>, out: &mut Vec<PresetRef>, 
         let path = entry.path();
         if path.is_dir() {
             walk(root, &path, ctx, out, depth + 1);
-        } else if path.extension().and_then(|e| e.to_str()) == Some(PRESET_FILE_EXT)
+        } else if matches_preset_ext(&path, ctx.file_ext)
             && let Some(preset) = read_preset_ref(
                 Some(root),
                 &path,
@@ -463,6 +491,7 @@ pub struct PresetStore {
     vendor: String,
     plugin_name: String,
     plugin_id_hash: u64,
+    file_ext: String,
     factory_root: Option<PathBuf>,
     user_root: Option<PathBuf>,
 }
@@ -486,9 +515,26 @@ impl PresetStore {
             vendor: vendor.to_string(),
             plugin_name: plugin_name.to_string(),
             plugin_id_hash,
+            file_ext: PRESET_FILE_EXT.to_string(),
             factory_root: None,
             user_root: user_preset_root(vendor, plugin_name, user_dir),
         }
+    }
+
+    /// Set the container file extension written by [`Self::save`] and
+    /// discovered alongside legacy `.trucepreset` files. Invalid or
+    /// reserved extensions fall back to [`PRESET_FILE_EXT`].
+    #[must_use]
+    pub fn with_file_ext(mut self, ext: &str) -> Self {
+        if let Some(clean) = sanitize_preset_ext(ext) {
+            self.file_ext = clean;
+        }
+        self
+    }
+
+    #[must_use]
+    pub fn file_ext(&self) -> &str {
+        &self.file_ext
     }
 
     #[must_use]
@@ -525,12 +571,13 @@ impl PresetStore {
         let mut packs: Vec<PresetRef> = Vec::new();
         if let Some(root) = &self.user_root {
             let packs_root = root.join("packs");
-            for mut preset in enumerate_scope(
+            for mut preset in enumerate_scope_with_ext(
                 root,
                 PresetScope::User,
                 &self.vendor,
                 &self.plugin_name,
                 self.plugin_id_hash,
+                &self.file_ext,
             ) {
                 if preset.uuid.is_empty() {
                     self.stamp_uuid(&mut preset);
@@ -544,12 +591,13 @@ impl PresetStore {
             }
         }
         let factory = self.factory_root.as_ref().map_or_else(Vec::new, |root| {
-            enumerate_scope(
+            enumerate_scope_with_ext(
                 root,
                 PresetScope::Factory,
                 &self.vendor,
                 &self.plugin_name,
                 self.plugin_id_hash,
+                &self.file_ext,
             )
         });
 
@@ -679,7 +727,7 @@ impl PresetStore {
             } else {
                 user_root.join(safe_filename(&meta.category))
             };
-            dir.join(format!("{file_stem}.{PRESET_FILE_EXT}"))
+            dir.join(format!("{file_stem}.{}", self.file_ext))
         };
 
         let ids: Vec<u32> = params.iter().map(|(id, _)| *id).collect();
@@ -1120,6 +1168,56 @@ mod tests {
             store.delete("u1"),
             Err(PresetError::ReadOnlyScope)
         ));
+
+        let _ = std::fs::remove_dir_all(&user);
+        let _ = std::fs::remove_dir_all(&factory);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "real file I/O; Miri isolation rejects it")]
+    fn custom_extension_saves_and_reads_legacy_trucepreset() {
+        let user = temp_dir("custom-ext-user");
+        let factory = temp_dir("custom-ext-factory");
+        let store = PresetStore::new("Vendor", "Plugin", TEST_HASH, None)
+            .with_file_ext("custompreset")
+            .with_user_root(&user)
+            .with_factory_root(&factory);
+        assert_eq!(store.file_ext(), "custompreset");
+
+        // Invalid extension falls back without losing prior value.
+        let fallback = PresetStore::new("Vendor", "Plugin", TEST_HASH, None)
+            .with_file_ext("../bad");
+        assert_eq!(fallback.file_ext(), PRESET_FILE_EXT);
+
+        write_sample(
+            &factory,
+            "factory.custompreset",
+            &meta("f1", "Factory", ""),
+            TEST_HASH,
+        );
+        // Legacy `.trucepreset` in the user dir remains discoverable & loadable.
+        write_sample(
+            &user,
+            "Legacy.trucepreset",
+            &meta("u-legacy", "Legacy", ""),
+            TEST_HASH,
+        );
+
+        let saved = store
+            .save(meta("", "New Sound", "lead"), &[(0, 0.75)], b"s")
+            .unwrap();
+        assert_eq!(
+            saved.path.extension().and_then(|e| e.to_str()),
+            Some("custompreset")
+        );
+
+        let all = store.enumerate();
+        assert_eq!(all.len(), 3);
+        assert!(all.iter().any(|p| p.uuid == "f1"));
+        assert!(all.iter().any(|p| p.uuid == "u-legacy"));
+        assert!(all.iter().any(|p| p.uuid == saved.uuid));
+        assert_eq!(store.load("u-legacy").unwrap().params, vec![(0, 0.5)]);
+        assert_eq!(store.load(&saved.uuid).unwrap().params, vec![(0, 0.75)]);
 
         let _ = std::fs::remove_dir_all(&user);
         let _ = std::fs::remove_dir_all(&factory);
