@@ -411,19 +411,43 @@ impl Scaffold {
     /// `truce_subcommand` while holding `build_lock`. The shared
     /// `<target>/bundles` would race with concurrent tests' wipes.
     fn assert_bundle_count_by_ext(&self, ext: &str, expected: usize) {
+        const BUNDLE_EXTS: &[&str] = &[
+            ".clap",
+            ".vst3",
+            ".vst",
+            ".component",
+            ".app",
+            ".lv2",
+            ".aaxplugin",
+        ];
         let bundles = &self.bundles_snapshot;
-        let names: Vec<String> = std::fs::read_dir(bundles)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "[{}] bundles snapshot missing at {}: {e}\n{}",
-                    self.label,
-                    bundles.display(),
-                    diagnose_target_layout(),
-                )
-            })
-            .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().to_string()))
-            .collect();
-        let count = names.iter().filter(|n| n.ends_with(ext)).count();
+        let read_root = std::fs::read_dir(bundles).unwrap_or_else(|e| {
+            panic!(
+                "[{}] bundles snapshot missing at {}: {e}\n{}",
+                self.label,
+                bundles.display(),
+                diagnose_target_layout(),
+            )
+        });
+        let mut names = Vec::new();
+        for entry in read_root.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let path = entry.path();
+            if name.ends_with(ext) {
+                names.push(name);
+            } else if path.is_dir() && !BUNDLE_EXTS.iter().any(|bext| name.ends_with(bext)) {
+                // `cargo truce build` stages per-target bundles inside `bundles/<triple>/`.
+                if let Ok(sub_entries) = std::fs::read_dir(&path) {
+                    for sub in sub_entries.flatten() {
+                        let sub_name = sub.file_name().to_string_lossy().to_string();
+                        if sub_name.ends_with(ext) {
+                            names.push(format!("{name}/{sub_name}"));
+                        }
+                    }
+                }
+            }
+        }
+        let count = names.len();
         assert_eq!(
             count,
             expected,
