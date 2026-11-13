@@ -31,7 +31,7 @@ pub fn dark() -> egui::Visuals {
     visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0_f32, TEXT);
 
     visuals.widgets.hovered.bg_fill = Color32::from_rgb(77, 77, 92);
-    visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0_f32, TEXT);
+    visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.5_f32, Color32::WHITE);
 
     visuals.widgets.active.bg_fill = PRIMARY;
     visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0_f32, Color32::WHITE);
