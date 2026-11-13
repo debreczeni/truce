@@ -382,19 +382,16 @@ impl PkgFormat {
 
     /// True for formats whose install destination can't be redirected
     /// into the user's home - AAX lives under
-    /// `/Library/Application Support/Avid/...` where Pro Tools scans,
-    /// AU v3 needs `/Applications/` for `LaunchServices` to register
-    /// the appex, and a standalone `.app` belongs in `/Applications/`
-    /// to show up in Launchpad. When the user picks "Install for me
-    /// only" but selects one of these, the installer escalates
-    /// (`auth="Root"` on the corresponding `<pkg-ref>`) so the
-    /// component still lands in the right place rather than failing
-    /// with a permission-denied shove.
+    /// `/Library/Application Support/Avid/...` where Pro Tools scans, and
+    /// AU v3 needs `/Applications/` for `LaunchServices` to register the
+    /// appex. (macOS relocates Standalone `.app` into `~/Applications/`
+    /// cleanly for per-user installs.) When the user picks "Install for
+    /// me only" but selects one of these, the installer escalates
+    /// (`auth="Root"` on the corresponding `<pkg-ref>`) so the component
+    /// still lands in the right place rather than failing with a
+    /// permission-denied shove.
     pub(crate) fn is_system_only_on_macos(&self) -> bool {
-        matches!(
-            self,
-            PkgFormat::Aax | PkgFormat::Au3 | PkgFormat::Standalone
-        )
+        matches!(self, PkgFormat::Aax | PkgFormat::Au3)
     }
 }
 
@@ -660,5 +657,25 @@ mod selection_tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("contradictory"), "got: {err}");
+    }
+
+    #[test]
+    fn standalone_is_not_system_only_on_macos() {
+        use super::PkgFormat;
+        for fmt in [
+            PkgFormat::Clap,
+            PkgFormat::Vst3,
+            PkgFormat::Vst2,
+            PkgFormat::Lv2,
+            PkgFormat::Au2,
+            PkgFormat::Standalone,
+        ] {
+            assert!(
+                !fmt.is_system_only_on_macos(),
+                "{fmt:?} should support per-user macOS installs"
+            );
+        }
+        assert!(PkgFormat::Aax.is_system_only_on_macos());
+        assert!(PkgFormat::Au3.is_system_only_on_macos());
     }
 }

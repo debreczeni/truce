@@ -939,12 +939,11 @@ pub(crate) fn generate_distribution_xml(
         // `root:wheel` even when "Install for me only" relocated the
         // destination to the user's home, and fails with EACCES.
         //
-        // - `--user` (explicit): user-viable formats (CLAP, VST3,
-        //   LV2, AU v2) override to `auth="None"` so the relocated
-        //   `~/Library/Audio/Plug-Ins/...` install runs as the
-        //   current user with no chown. System-only formats (AAX,
-        //   AU v3, standalone) keep `auth="Root"` so they escalate
-        //   for `/Library/...` / `/Applications/`.
+        // - `--user` (explicit): user-viable formats (CLAP, VST3, VST2,
+        //   LV2, AU v2, standalone) override to `auth="None"` so the relocated
+        //   user-home install runs as the current user with no chown.
+        //   System-only formats (AAX, AU v3) keep `auth="Root"` so they
+        //   escalate for `/Library/...` / `/Applications/`.
         // - `--ask` (default): leave user-viable formats at the
         //   component default - the user might pick "System" at
         //   install time, which needs root either way. System-only
@@ -1199,4 +1198,56 @@ pub(crate) fn write_format_scripts(
     }
 
     Ok(scripts_dir)
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_dist_tests {
+    use super::generate_distribution_xml;
+    use crate::commands::package::PkgFormat;
+    use crate::install_scope::PkgScope;
+
+    #[test]
+    fn standalone_does_not_force_root_auth_under_user_or_ask() {
+        let fmts = [PkgFormat::Clap, PkgFormat::Standalone, PkgFormat::Aax];
+
+        let ask_xml = generate_distribution_xml(
+            "Complexor",
+            "eu.modmonk",
+            "complexor",
+            &fmts,
+            &[],
+            "0.1.0",
+            None,
+            PkgScope::Ask,
+            false,
+        );
+        assert!(
+            !ask_xml.contains("<pkg-ref id=\"eu.modmonk.complexor.standalone\" auth=\"Root\"/>"),
+            "standalone should not force auth=\"Root\" under Ask:\n{ask_xml}"
+        );
+        assert!(
+            ask_xml.contains("<pkg-ref id=\"eu.modmonk.complexor.aax\" auth=\"Root\"/>"),
+            "AAX must keep auth=\"Root\" under Ask:\n{ask_xml}"
+        );
+
+        let user_xml = generate_distribution_xml(
+            "Complexor",
+            "eu.modmonk",
+            "complexor",
+            &[PkgFormat::Clap, PkgFormat::Standalone],
+            &[],
+            "0.1.0",
+            None,
+            PkgScope::User,
+            false,
+        );
+        assert!(
+            user_xml.contains("<pkg-ref id=\"eu.modmonk.complexor.standalone\" auth=\"None\"/>"),
+            "standalone should get auth=\"None\" under User:\n{user_xml}"
+        );
+        assert!(
+            user_xml.contains("enable_currentUserHome=\"true\" enable_localSystem=\"false\""),
+            "User scope should only enable currentUserHome:\n{user_xml}"
+        );
+    }
 }

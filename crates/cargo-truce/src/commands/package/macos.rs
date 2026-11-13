@@ -117,11 +117,11 @@ pub(crate) fn cmd_package_macos(args: &[String], selection: &super::SuiteSelecti
     if formats.is_empty() {
         return Err("no formats to package".into());
     }
-    // AAX / AU v3 / standalone are system-only on macOS; a `--user`
-    // package that includes one still needs the localSystem domain to
-    // install it, so widen the installer scope to System. The `.pkg`
-    // filename keeps the requested scope's suffix (see `run_productbuild`)
-    // so CI scripts still find it.
+    // AAX / AU v3 are system-only on macOS; a `--user` package that
+    // includes one still needs the localSystem domain to install it, so
+    // widen the installer scope to System. The `.pkg` filename keeps
+    // the requested scope's suffix (see `run_productbuild`) so CI
+    // scripts still find it.
     let effective_scope =
         if scope == PkgScope::User && formats.iter().any(PkgFormat::is_system_only_on_macos) {
             PkgScope::System
