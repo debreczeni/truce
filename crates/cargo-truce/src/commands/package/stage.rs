@@ -250,6 +250,9 @@ fn stage_clap_macos(
         exec_name = xml_escape(&exec_name),
     );
     fs::write(bundle.join("Contents/Info.plist"), &plist)?;
+    // LaunchServices / Finder requires `Contents/PkgInfo` on non-app bundles so
+    // `.clap` renders as a single package file rather than an ordinary folder.
+    fs::write(bundle.join("Contents/PkgInfo"), "BNDL????")?;
     // Presets are part of the bundle's sealed Resources - emit before
     // codesign so the signature covers them.
     if let Some(fp) = presets::load_factory_presets(root, p, config)? {
@@ -365,6 +368,7 @@ fn stage_vst3_macos(root: &Path, p: &PluginDef, config: &Config, bundle: &Path) 
         exec_name = xml_escape(&exec_name),
     );
     fs::write(bundle.join("Contents/Info.plist"), &plist)?;
+    fs::write(bundle.join("Contents/PkgInfo"), "BNDL????")?;
     codesign_bundle(
         bundle.to_str().unwrap(),
         &crate::application_identity(),
@@ -582,6 +586,7 @@ pub(crate) fn stage_au2(
         exec_name = xml_escape(&exec_name),
     );
     fs::write(bundle.join("Contents/Info.plist"), &plist)?;
+    fs::write(bundle.join("Contents/PkgInfo"), "BNDL????")?;
     // The shim's kAudioUnitProperty_FactoryPresets handler enumerates
     // these from the sealed bundle - emit before codesign.
     if let Some(fp) = presets::load_factory_presets(root, p, config)? {
@@ -865,6 +870,7 @@ pub(crate) fn write_standalone_info_plist(
         mic_usage = xml_escape(&mic_usage),
     );
     fs::write(bundle_root.join("Contents/Info.plist"), plist)?;
+    fs::write(bundle_root.join("Contents/PkgInfo"), "APPL????")?;
     Ok(())
 }
 

@@ -492,6 +492,21 @@ fn scope_for(format: Format, requested: Option<InstallScope>) -> InstallScope {
     effective
 }
 
+/// Write `Contents/PkgInfo` (`BNDL????`) so Finder/LaunchServices treats macOS
+/// audio plugin bundles as single package files instead of ordinary folders.
+#[cfg(target_os = "macos")]
+fn install_macos_pkginfo(contents: &Path, tag: &str, scope: InstallScope) -> Res {
+    let dst_pkginfo = contents.join("PkgInfo");
+    if scope.needs_sudo() {
+        let pkginfo_tmp = tmp_manifests().join(format!("{tag}.pkginfo"));
+        fs_ctx::write(&pkginfo_tmp, "BNDL????")?;
+        run_sudo("cp", &[pkginfo_tmp.as_os_str(), dst_pkginfo.as_os_str()])?;
+    } else {
+        fs_ctx::write(dst_pkginfo, "BNDL????")?;
+    }
+    Ok(())
+}
+
 #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
 pub(crate) fn install_clap(
     root: &Path,
@@ -564,6 +579,7 @@ pub(crate) fn install_clap(
             fs_ctx::copy(&dylib, macos_dir.join(&exec_name))?;
             fs_ctx::copy(&plist_tmp, contents.join("Info.plist"))?;
         }
+        install_macos_pkginfo(&contents, &format!("{}_clap", p.bundle_id), scope)?;
 
         // Presets are part of the bundle's sealed Resources - they
         // must land before codesign or the signature won't cover
@@ -672,6 +688,7 @@ fn install_vst3(
             fs_ctx::copy(&dylib, macos_dir.join(&exec_name))?;
             fs_ctx::copy(&plist_tmp, contents.join("Info.plist"))?;
         }
+        install_macos_pkginfo(&contents, &format!("{}_vst3", p.bundle_id), scope)?;
 
         codesign_bundle(
             bundle.to_str().unwrap(),
@@ -759,19 +776,13 @@ fn install_vst2(root: &Path, p: &PluginDef, config: &Config, scope: InstallScope
             run_sudo("cp", &[dylib.as_os_str(), dst_dylib.as_os_str()])?;
             let dst_plist = bundle.join("Contents/Info.plist");
             run_sudo("cp", &[OsStr::new(&plist_tmp), dst_plist.as_os_str()])?;
-            // PkgInfo is small enough that re-emitting via run_sudo
-            // (rather than tee) keeps the helper surface minimal.
-            let pkginfo_tmp = tmp_manifests().join(format!("{}_vst2.pkginfo", p.bundle_id));
-            fs_ctx::write(&pkginfo_tmp, "BNDL????")?;
-            let dst_pkginfo = bundle.join("Contents/PkgInfo");
-            run_sudo("cp", &[pkginfo_tmp.as_os_str(), dst_pkginfo.as_os_str()])?;
         } else {
             let _ = fs::remove_dir_all(&bundle);
             fs_ctx::create_dir_all(&macos_dir)?;
             fs_ctx::copy(&dylib, macos_dir.join(&exec_name))?;
             fs_ctx::write(bundle.join("Contents/Info.plist"), &plist)?;
-            fs_ctx::write(bundle.join("Contents/PkgInfo"), "BNDL????")?;
         }
+        install_macos_pkginfo(&bundle.join("Contents"), &format!("{}_vst2", p.bundle_id), scope)?;
 
         codesign_bundle(
             bundle.to_str().unwrap(),
@@ -988,6 +999,7 @@ fn install_au(
     } else {
         fs_ctx::copy(&plist_tmp, &info_plist)?;
     }
+    install_macos_pkginfo(&contents, &format!("{}_au", p.bundle_id), scope)?;
 
     // The shim's kAudioUnitProperty_FactoryPresets handler enumerates
     // these at runtime. Part of the sealed bundle - must precede
