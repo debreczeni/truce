@@ -430,10 +430,12 @@ pub struct LegacyStateConfig {
 /// `[plugin.presets]` - factory-preset emission and per-plugin branding.
 #[derive(Deserialize, Debug, Default)]
 pub struct PresetsConfig {
-    /// Directory of authored `.preset` TOML files, relative to the
-    /// plugin's crate directory. Defaults to `presets`.
-    #[serde(default = "default_presets_dir")]
-    pub factory_dir: String,
+    /// Optional directory of authored `.preset` TOML files, relative
+    /// to the plugin's crate directory. When omitted, defaults to
+    /// probing `presets/` (without failing if absent). When explicitly
+    /// set, missing directories are reported as an error.
+    #[serde(default)]
+    pub factory_dir: Option<String>,
     /// Optional full override for the `truce/<vendor>/<plugin>` subpath
     /// of the user-scope preset root (e.g. `"Acme/MySynth"`).
     /// Relative segments only; `..` is rejected. Resolves to
@@ -460,8 +462,13 @@ pub struct PresetsConfig {
     pub extension: Option<String>,
 }
 
-fn default_presets_dir() -> String {
-    "presets".to_string()
+impl PresetsConfig {
+    /// Authored factory-preset directory relative to the plugin's
+    /// crate directory (`"presets"` when `factory_dir` is omitted).
+    #[must_use]
+    pub fn resolved_factory_dir(&self) -> &str {
+        self.factory_dir.as_deref().unwrap_or("presets")
+    }
 }
 
 /// Resolve and validate the native preset file extension (without dot)
@@ -732,7 +739,7 @@ pub fn load_config(path: &Path) -> Result<Config, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Config, MidiWiring, extract_json_string, midi_wiring, midi2_dialects,
+        Config, MidiWiring, PresetsConfig, extract_json_string, midi_wiring, midi2_dialects,
         resolve_preset_extension, resolve_preset_user_dir, validate_bundle_id,
     };
 
@@ -906,8 +913,37 @@ fourcc = "Othr"
 [plugin.presets]
 extension = "otherpreset"
 user_dir = "custom/other"
+factory_dir = "banks"
 "#;
         let cfg: Config = toml::from_str(toml).unwrap();
+        assert_eq!(
+            cfg.plugin[0]
+                .presets
+                .as_ref()
+                .and_then(|p| p.factory_dir.as_deref()),
+            None
+        );
+        assert_eq!(
+            cfg.plugin[0]
+                .presets
+                .as_ref()
+                .map(PresetsConfig::resolved_factory_dir),
+            Some("presets")
+        );
+        assert_eq!(
+            cfg.plugin[1]
+                .presets
+                .as_ref()
+                .and_then(|p| p.factory_dir.as_deref()),
+            Some("banks")
+        );
+        assert_eq!(
+            cfg.plugin[1]
+                .presets
+                .as_ref()
+                .map(PresetsConfig::resolved_factory_dir),
+            Some("banks")
+        );
         assert_eq!(
             resolve_preset_extension(&cfg.presets, &cfg.plugin[0]).unwrap(),
             "custompreset"

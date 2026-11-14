@@ -89,15 +89,15 @@ pub(crate) struct FactoryPresets {
 }
 
 /// The plugin's authored-library directory (`presets/` next to the
-/// crate, or the `[plugin.presets]` override), whether or not it
-/// exists yet. `None` when the crate dir can't be located.
+/// crate, or the `[plugin.presets].factory_dir` override), whether or
+/// not it exists yet. `None` when the crate dir can't be located.
 pub(crate) fn authored_presets_dir(root: &Path, p: &PluginDef) -> Option<PathBuf> {
     let manifest = crate::util::locate_plugin_manifest(root, &p.crate_name)?;
     let crate_dir = manifest.parent()?;
     let dir = p
         .presets
         .as_ref()
-        .map_or("presets", |c| c.factory_dir.as_str());
+        .map_or("presets", truce_build::PresetsConfig::resolved_factory_dir);
     Some(crate_dir.join(dir))
 }
 
@@ -118,21 +118,25 @@ pub(crate) fn validate_preset_config(
 
 /// Load and canonicalise the plugin's factory presets, stamping
 /// missing uuids back into the authored files. Returns `Ok(None)`
-/// when the plugin has no preset library: no `[plugin.presets]` in
-/// truce.toml and no `presets/` directory next to the crate. An
-/// explicit `[plugin.presets]` with a missing directory is an error.
+/// when the plugin has no preset library (no `presets/` directory next
+/// to the crate, or empty one) and `[plugin.presets].factory_dir` was
+/// not explicitly set. An explicit `[plugin.presets].factory_dir` with
+/// an empty or missing directory is an error.
 pub(crate) fn load_factory_presets(
     root: &Path,
     p: &PluginDef,
     config: &Config,
 ) -> Result<Option<FactoryPresets>, crate::CargoTruceError> {
     let (_user_dir, file_ext) = validate_preset_config(config, p)?;
-    let configured_dir = p.presets.as_ref().map(|c| c.factory_dir.clone());
+    let configured_dir = p.presets.as_ref().and_then(|c| c.factory_dir.as_deref());
+    if configured_dir.is_some_and(|raw| raw.trim().is_empty()) {
+        return Err("[plugin.presets].factory_dir cannot be empty".into());
+    }
 
     let Some(dir) = authored_presets_dir(root, p) else {
         if configured_dir.is_some() {
             return Err(format!(
-                "[plugin.presets] set for \"{}\" but its crate dir could not be located",
+                "[plugin.presets].factory_dir set for \"{}\" but its crate dir could not be located",
                 p.name
             )
             .into());
@@ -143,7 +147,7 @@ pub(crate) fn load_factory_presets(
     if !dir.is_dir() {
         if configured_dir.is_some() {
             return Err(format!(
-                "[plugin.presets] points at {} but it does not exist",
+                "[plugin.presets].factory_dir points at {} but it does not exist",
                 dir.display()
             )
             .into());
@@ -542,4 +546,113 @@ pub(crate) fn emit_lv2_presets(fp: &FactoryPresets, bundle: &Path, plugin_uri: &
         presets_dir.display()
     ));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(label: &str) -> Self {
+            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!(
+                "cargo-truce-presets-{}-{n}-{label}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join("src")).unwrap();
+            std::fs::write(
+                dir.join("Cargo.toml"),
+                "[package]\nname = \"my-plug\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            )
+            .unwrap();
+            std::fs::write(dir.join("src/lib.rs"), "").unwrap();
+            Self(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn config_from_toml(toml_str: &str) -> Config {
+        toml::from_str(toml_str).unwrap()
+    }
+
+    #[test]
+    fn branding_only_plugin_presets_without_factory_dir_is_none() {
+        let dir = TempDir::new("branding-only");
+        let cfg = config_from_toml(
+            r#"
+[vendor]
+name = "Acme Studio"
+id = "com.acme"
+au_manufacturer = "Acme"
+
+[presets]
+extension = "acmepreset"
+vendor_dir = "acme"
+
+[[plugin]]
+name = "My Plug"
+bundle_id = "my-plug"
+crate = "my-plug"
+category = "effect"
+
+[plugin.presets]
+plugin_dir = "myplug"
+"#,
+        );
+        let res = load_factory_presets(&dir.0, &cfg.plugin[0], &cfg).unwrap();
+        assert!(res.is_none());
+    }
+
+    #[test]
+    fn explicit_factory_dir_errors_when_missing_or_empty() {
+        let dir = TempDir::new("explicit-missing");
+        let missing_cfg = config_from_toml(
+            r#"
+[vendor]
+name = "Acme Studio"
+id = "com.acme"
+au_manufacturer = "Acme"
+
+[[plugin]]
+name = "My Plug"
+bundle_id = "my-plug"
+crate = "my-plug"
+category = "effect"
+
+[plugin.presets]
+factory_dir = "missing-presets"
+"#,
+        );
+        assert!(load_factory_presets(&dir.0, &missing_cfg.plugin[0], &missing_cfg).is_err());
+
+        let empty_cfg = config_from_toml(
+            r#"
+[vendor]
+name = "Acme Studio"
+id = "com.acme"
+au_manufacturer = "Acme"
+
+[[plugin]]
+name = "My Plug"
+bundle_id = "my-plug"
+crate = "my-plug"
+category = "effect"
+
+[plugin.presets]
+factory_dir = "   "
+"#,
+        );
+        assert!(load_factory_presets(&dir.0, &empty_cfg.plugin[0], &empty_cfg).is_err());
+    }
 }
